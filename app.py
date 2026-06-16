@@ -1,683 +1,820 @@
 """
-app.py — All-In-One AI Social Media Audit & Viral Engine
-Single-file deployment. Contains all modules inline:
-  [1] LLM Router      — OpenAI / Anthropic / Gemini / Groq
-  [2] Input Models    — Platform metric dataclasses + validation
-  [3] Prompt Engine   — 4-stage audit prompt builder
-  [4] Streamlit UI    — Settings panel, forms, results renderer
+VHQ-SOCIAL-AUDITOR
+Phase 1 — Premium UI Shell (glassmorphic, neon 3D header, animations)
+Phase 2 — Supabase Auth (signup / login / profile onboarding with age-gate)
 """
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# IMPORTS
-# ═══════════════════════════════════════════════════════════════════════════════
-
-from __future__ import annotations
-import json
-import re
-from dataclasses import dataclass
-from enum import Enum
-from typing import Any, Optional
 import streamlit as st
+from supabase import create_client, Client
+from datetime import date, datetime, timedelta
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# [1] LLM ROUTER
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class Provider(str, Enum):
-    OPENAI    = "openai"
-    ANTHROPIC = "anthropic"
-    GEMINI    = "gemini"
-    GROQ      = "groq"
-
-
-PROVIDER_LABELS: dict[Provider, str] = {
-    Provider.OPENAI:    "OpenAI · GPT-4o",
-    Provider.ANTHROPIC: "Anthropic · Claude 3.5 Sonnet",
-    Provider.GEMINI:    "Google AI · Gemini 1.5 Pro (Free tier)",
-    Provider.GROQ:      "Groq Cloud · Llama-3 70B (Ultra-fast)",
-}
-
-_LLM_SYSTEM = (
-    "You are an elite social media growth strategist and algorithm expert. "
-    "You ALWAYS return your analysis as a single valid JSON object. "
-    "Never include markdown fences, preamble, or trailing commentary."
-)
-
-
-def _call_openai(api_key: str, prompt: str, max_tokens: int) -> str:
-    try:
-        import openai as _openai
-    except ImportError:
-        raise ImportError("openai package not installed.")
-    client = _openai.OpenAI(api_key=api_key)
-    try:
-        r = client.chat.completions.create(
-            model="gpt-4o", max_tokens=max_tokens, temperature=0.75,
-            messages=[{"role": "system", "content": _LLM_SYSTEM},
-                      {"role": "user",   "content": prompt}],
-        )
-        return r.choices[0].message.content.strip()
-    except _openai.AuthenticationError:
-        raise ValueError("OpenAI: Invalid API key. Check your key and retry.")
-    except _openai.RateLimitError:
-        raise RuntimeError("OpenAI: Rate limit reached. Wait a moment and retry.")
-    except _openai.APIError as e:
-        raise RuntimeError(f"OpenAI API error: {e}")
-
-
-def _call_anthropic(api_key: str, prompt: str, max_tokens: int) -> str:
-    try:
-        import anthropic as _anthropic
-    except ImportError:
-        raise ImportError("anthropic package not installed.")
-    client = _anthropic.Anthropic(api_key=api_key)
-    try:
-        msg = client.messages.create(
-            model="claude-3-5-sonnet-20241022", max_tokens=max_tokens,
-            system=_LLM_SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return msg.content[0].text.strip()
-    except _anthropic.AuthenticationError:
-        raise ValueError("Anthropic: Invalid API key. Check your key and retry.")
-    except _anthropic.RateLimitError:
-        raise RuntimeError("Anthropic: Rate limit reached. Wait a moment and retry.")
-    except _anthropic.APIError as e:
-        raise RuntimeError(f"Anthropic API error: {e}")
-
-
-def _call_gemini(api_key: str, prompt: str, max_tokens: int) -> str:
-    try:
-        import google.generativeai as genai
-    except ImportError:
-        raise ImportError("google-generativeai package not installed.")
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        model_name="gemini-1.5-pro",
-        generation_config=genai.GenerationConfig(max_output_tokens=max_tokens, temperature=0.75),
-    )
-    try:
-        r = model.generate_content(_LLM_SYSTEM + "\n\n" + prompt)
-        return r.text.strip()
-    except Exception as e:
-        err = str(e).lower()
-        if "api_key" in err or "invalid" in err or "authentication" in err:
-            raise ValueError("Gemini: Invalid API key. Check your key and retry.")
-        elif "quota" in err or "rate" in err:
-            raise RuntimeError("Gemini: Quota exceeded. Wait or upgrade your plan.")
-        raise RuntimeError(f"Gemini API error: {e}")
-
-
-def _call_groq(api_key: str, prompt: str, max_tokens: int) -> str:
-    try:
-        from groq import Groq
-    except ImportError:
-        raise ImportError("groq package not installed.")
-    client = Groq(api_key=api_key)
-    try:
-        r = client.chat.completions.create(
-            model="llama3-70b-8192", max_tokens=max_tokens, temperature=0.75,
-            messages=[{"role": "system", "content": _LLM_SYSTEM},
-                      {"role": "user",   "content": prompt}],
-        )
-        return r.choices[0].message.content.strip()
-    except Exception as e:
-        err = str(e).lower()
-        if "invalid api key" in err or "authentication" in err:
-            raise ValueError("Groq: Invalid API key. Check your key and retry.")
-        elif "rate limit" in err:
-            raise RuntimeError("Groq: Rate limit hit. Wait a moment and retry.")
-        raise RuntimeError(f"Groq API error: {e}")
-
-
-def _safe_parse_json(raw: str) -> dict[str, Any]:
-    cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-    cleaned = re.sub(r"\s*```$", "", cleaned.strip())
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Model returned malformed JSON: {e}\n\nRaw:\n{raw[:500]}")
-
-
-def run_prompt(provider: Provider, api_key: str, prompt: str, max_tokens: int = 2000) -> dict[str, Any]:
-    if not api_key or not api_key.strip():
-        raise ValueError(f"No API key provided for {PROVIDER_LABELS[provider]}.")
-    callers = {
-        Provider.OPENAI:    _call_openai,
-        Provider.ANTHROPIC: _call_anthropic,
-        Provider.GEMINI:    _call_gemini,
-        Provider.GROQ:      _call_groq,
-    }
-    raw = callers[provider](api_key.strip(), prompt, max_tokens)
-    return _safe_parse_json(raw)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# [2] INPUT MODELS
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class Platform(str, Enum):
-    YOUTUBE_LONG   = "youtube_long"
-    YOUTUBE_SHORTS = "youtube_shorts"
-    INSTAGRAM      = "instagram"
-    THREADS        = "threads"
-    WHATSAPP       = "whatsapp"
-    MESSENGER      = "messenger"
-
-
-PLATFORM_LABELS: dict[Platform, str] = {
-    Platform.YOUTUBE_LONG:   "YouTube · Long-form Video",
-    Platform.YOUTUBE_SHORTS: "YouTube · Shorts",
-    Platform.INSTAGRAM:      "Instagram · Reels & Posts",
-    Platform.THREADS:        "Threads · Posts",
-    Platform.WHATSAPP:       "WhatsApp Business · Broadcast",
-    Platform.MESSENGER:      "Facebook Messenger · Broadcast",
-}
-
-PLATFORM_ICONS: dict[Platform, str] = {
-    Platform.YOUTUBE_LONG:   "▶",
-    Platform.YOUTUBE_SHORTS: "⚡",
-    Platform.INSTAGRAM:      "◈",
-    Platform.THREADS:        "◎",
-    Platform.WHATSAPP:       "◉",
-    Platform.MESSENGER:      "◈",
-}
-
-
-def _pct(v: float, name: str) -> float:
-    if not (0.0 <= v <= 100.0):
-        raise ValueError(f"{name} must be 0–100%. Got: {v}")
-    return v
-
-def _pos(v: float, name: str) -> float:
-    if v < 0:
-        raise ValueError(f"{name} cannot be negative. Got: {v}")
-    return v
-
-
-@dataclass
-class YouTubeLongMetrics:
-    niche: str; content_description: str
-    impressions: int; views: int; ctr_percent: float
-    avd_percent: float; avd_minutes: float
-    likes: int = 0; comments: int = 0; subscribers_gained: int = 0
-
-    def __post_init__(self):
-        _pct(self.ctr_percent, "CTR %"); _pct(self.avd_percent, "AVD %")
-        _pos(self.avd_minutes, "AVD Minutes")
-
-    def to_prompt_context(self) -> str:
-        return f"""PLATFORM: YouTube Long-form Video
-NICHE: {self.niche}
-CONTENT: {self.content_description}
-Impressions: {self.impressions:,} | Views: {self.views:,} | CTR: {self.ctr_percent:.2f}%
-AVD: {self.avd_percent:.1f}% ({self.avd_minutes:.1f} min) | Likes: {self.likes:,} | Comments: {self.comments:,} | Subs gained: {self.subscribers_gained:,}
-BENCHMARKS: Strong CTR ≥ 6% | Acceptable 3–6% | Weak < 3%. Strong AVD ≥ 50% | Weak < 35%."""
-
-
-@dataclass
-class YouTubeShortsMetrics:
-    niche: str; content_description: str
-    views: int; likes: int; comments: int; shares: int
-    avd_percent: float; subscribers_gained: int = 0
-
-    def __post_init__(self):
-        _pct(self.avd_percent, "AVD %")
-
-    def to_prompt_context(self) -> str:
-        eng = ((self.likes + self.comments + self.shares) / self.views * 100) if self.views > 0 else 0
-        return f"""PLATFORM: YouTube Shorts
-NICHE: {self.niche}
-CONTENT: {self.content_description}
-Views: {self.views:,} | Likes: {self.likes:,} | Comments: {self.comments:,} | Shares: {self.shares:,}
-Engagement: {eng:.2f}% | AVD: {self.avd_percent:.1f}% | Subs gained: {self.subscribers_gained:,}
-BENCHMARKS: Shorts AVD ≥ 80% excellent | < 60% = drop-off. Engagement ≥ 5% healthy | < 2% suppression risk."""
-
-
-@dataclass
-class InstagramMetrics:
-    platform: Platform; niche: str; content_description: str; content_type: str
-    plays_or_reach: int; likes: int; comments: int; saves: int; shares: int
-    follows_gained: int = 0; profile_visits: int = 0
-
-    def to_prompt_context(self) -> str:
-        eng = ((self.likes + self.comments + self.saves + self.shares) / self.plays_or_reach * 100) if self.plays_or_reach > 0 else 0
-        label = PLATFORM_LABELS[self.platform]
-        return f"""PLATFORM: {label} · {self.content_type}
-NICHE: {self.niche}
-CONTENT: {self.content_description}
-Plays/Reach: {self.plays_or_reach:,} | Likes: {self.likes:,} | Comments: {self.comments:,}
-Saves: {self.saves:,} | Shares: {self.shares:,} | Engagement: {eng:.2f}%
-Follows gained: {self.follows_gained:,} | Profile visits: {self.profile_visits:,}
-BENCHMARKS: Engagement ≥ 5% strong | < 2% suppressed. Saves are highest-weight signal. Low saves (< 0.5% reach) = weak value perception."""
-
-
-@dataclass
-class MessagingMetrics:
-    platform: Platform; niche: str; campaign_goal: str
-    messages_sent: int; messages_opened: int; open_rate: float
-    replies: int; reply_rate: float
-    link_clicks: int = 0; opt_outs: int = 0
-
-    def __post_init__(self):
-        _pct(self.open_rate, "Open Rate %"); _pct(self.reply_rate, "Reply Rate %")
-
-    def to_prompt_context(self) -> str:
-        click_rate = (self.link_clicks / self.messages_sent * 100) if self.messages_sent > 0 else 0
-        label = PLATFORM_LABELS[self.platform]
-        return f"""PLATFORM: {label}
-NICHE: {self.niche} | GOAL: {self.campaign_goal}
-Sent: {self.messages_sent:,} | Opened: {self.messages_opened:,} | Open rate: {self.open_rate:.2f}%
-Replies: {self.replies:,} | Reply rate: {self.reply_rate:.2f}% | Clicks: {self.link_clicks:,} | Click rate: {click_rate:.2f}% | Opt-outs: {self.opt_outs:,}
-BENCHMARKS: WhatsApp open rate avg 85–98% | Below 70% = list health issue. Reply rate > 10% strong | < 3% = message failure. Opt-out > 2% = content mismatch."""
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# [3] PROMPT ENGINE
-# ═══════════════════════════════════════════════════════════════════════════════
-
-_OUTPUT_SCHEMA = """
-Return ONLY a JSON object matching this schema. No markdown. No text outside the JSON.
-
-{
-  "diagnostics": {
-    "overall_health_score": <integer 0-100>,
-    "health_label": "<Struggling | Below Average | Average | Good | Excellent>",
-    "flags": [
-      {
-        "metric": "<metric name>",
-        "value": "<observed value>",
-        "benchmark": "<target value>",
-        "severity": "<Critical | Warning | Info>",
-        "fault": "<one-sentence plain-English fault>"
-      }
-    ],
-    "primary_bottleneck": "<the single most important thing hurting performance>"
-  },
-  "behavioral_analysis": {
-    "algorithm_status": "<Suppressed | Neutral | Favoured | Viral>",
-    "suppression_reasons": ["<reason 1>", "<reason 2>", "<reason 3>"],
-    "audience_signal_quality": "<Poor | Fair | Good | Excellent>",
-    "content_signal_quality": "<Poor | Fair | Good | Excellent>",
-    "verdict": "<2-3 sentence expert paragraph explaining WHY the algorithm is responding this way>"
-  },
-  "action_plan": {
-    "priority": "<Immediate | This Week | This Month>",
-    "steps": [
-      {
-        "step_number": <integer>,
-        "action": "<concise action title>",
-        "detail": "<specific tactical instruction — not generic advice>",
-        "expected_impact": "<what metric this improves and by how much>"
-      }
-    ]
-  },
-  "viral_assets": {
-    "niche": "<user niche>",
-    "title_variations": ["<title 1>", "<title 2>", "<title 3>"],
-    "hook_scripts": [
-      {"hook_type": "<Pattern Interrupt | Curiosity | Pain-Point | Bold Claim>", "script": "<15-30 word verbatim hook>"},
-      {"hook_type": "<Pattern Interrupt | Curiosity | Pain-Point | Bold Claim>", "script": "<15-30 word verbatim hook>"}
-    ]
-  }
-}""".strip()
-
-
-def build_prompt(metrics: object) -> str:
-    ctx = metrics.to_prompt_context()
-
-    if isinstance(metrics, YouTubeLongMetrics):
-        persona = "You are a senior YouTube growth consultant who has helped creators go from 0 to 500K subscribers. Be brutally honest and hyper-specific to the numbers — never say 'CTR is low', say exactly how far below benchmark it is and what thumbnail/title issue causes it."
-    elif isinstance(metrics, YouTubeShortsMetrics):
-        persona = "You are a YouTube Shorts algorithm expert who reverse-engineers virality. Shorts are judged by loop rate and AVD%. Focus the action plan on hook (0-2 sec), loop triggers, vertical pacing, and comment-bait techniques."
-    elif isinstance(metrics, InstagramMetrics):
-        pname = "Instagram" if metrics.platform == Platform.INSTAGRAM else "Threads"
-        persona = f"You are an Instagram and Meta algorithm specialist. Saves and shares are the highest-weight signals for {pname} distribution — calibrate severity flags accordingly. Viral assets should be formatted as Reel concepts or post hooks for {pname}."
-    elif isinstance(metrics, MessagingMetrics):
-        pname = "WhatsApp Business" if metrics.platform == Platform.WHATSAPP else "Facebook Messenger"
-        persona = f"You are a conversational marketing expert specialising in {pname} broadcast campaigns. Key signals: open rate (list health + timing), reply rate (message relevance + CTA), opt-out rate (content-audience fit). For viral_assets, replace title_variations with 3 high-converting message opening lines, and hook_scripts with 2 full broadcast message openers (first 2-3 sentences) that maximise open-to-reply conversion."
-    else:
-        raise TypeError(f"Unknown metrics type: {type(metrics).__name__}")
-
-    return f"{persona}\n\n{ctx}\n\nAUDIT TASK: Perform a deep algorithmic audit of the above metrics.\n\n{_OUTPUT_SCHEMA}"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# [4] STREAMLIT UI
-# ═══════════════════════════════════════════════════════════════════════════════
-
+# ═══════════════════════════════════════════════════════════════
+# PAGE CONFIG
+# ═══════════════════════════════════════════════════════════════
 st.set_page_config(
-    page_title="Viral Engine · AI Audit Suite",
-    page_icon="⚡",
+    page_title="VHQ · Social Auditor",
+    page_icon="⬡",
     layout="centered",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
+# ═══════════════════════════════════════════════════════════════
+# DESIGN SYSTEM
+# ═══════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@400;500;600;700&family=Syne:wght@700;800&display=swap');
+/* ── Fonts ── */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Orbitron:wght@700;900&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; background-color: #080808; color: #EDECE8; }
+/* ── Reset & base ── */
+html, body, [class*="css"] {
+  font-family: 'Space Grotesk', sans-serif;
+  background: #050508;
+  color: #E8E6F0;
+  -webkit-font-smoothing: antialiased;
+}
 #MainMenu, footer, header { visibility: hidden; }
-.block-container { padding: 0 1rem 4rem 1rem; max-width: 720px; margin: auto; }
+.block-container {
+  padding: 0 1rem 5rem 1rem;
+  max-width: 680px;
+  margin: auto;
+}
 
-[data-testid="stSidebar"] { background: #0F0F0F; border-right: 1px solid #1F1F1F; }
-[data-testid="stSidebar"] label { color: #999 !important; font-size: 0.8rem !important; }
-[data-testid="stSidebar"] .stSelectbox > div > div { background: #1A1A1A !important; border: 1px solid #2A2A2A !important; border-radius: 8px !important; color: #EDECE8 !important; }
-[data-testid="stSidebar"] .stTextInput > div > div > input { background: #1A1A1A !important; border: 1px solid #2A2A2A !important; border-radius: 8px !important; color: #EDECE8 !important; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; }
+/* ══════════════════════════════════════════
+   3D NEON HEADER
+══════════════════════════════════════════ */
+@keyframes neonPulse {
+  0%, 100% {
+    text-shadow:
+      0 0 6px #fff,
+      0 0 20px #a78bfa,
+      0 0 40px #7c3aed,
+      0 0 80px #7c3aed,
+      0 2px 0 #4c1d95,
+      0 4px 0 #3b0764,
+      0 6px 10px rgba(0,0,0,0.6);
+  }
+  50% {
+    text-shadow:
+      0 0 10px #fff,
+      0 0 30px #c4b5fd,
+      0 0 60px #a78bfa,
+      0 0 100px #7c3aed,
+      0 2px 0 #4c1d95,
+      0 4px 0 #3b0764,
+      0 6px 14px rgba(0,0,0,0.7);
+  }
+}
 
-.hero { padding: 3rem 0 2rem 0; text-align: center; border-bottom: 1px solid #1A1A1A; margin-bottom: 2rem; }
-.hero-eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; letter-spacing: 0.2em; text-transform: uppercase; color: #F97316; margin-bottom: 0.8rem; }
-.hero-title { font-family: 'Syne', sans-serif; font-size: clamp(1.9rem, 6vw, 2.8rem); font-weight: 800; line-height: 1.05; letter-spacing: -0.03em; margin: 0 0 0.7rem 0; color: #FFF; }
-.hero-title span { color: #F97316; }
-.hero-sub { font-size: 0.92rem; color: #666; margin: 0; line-height: 1.5; }
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
 
-.section-label { font-family: 'IBM Plex Mono', monospace; font-size: 0.65rem; letter-spacing: 0.15em; text-transform: uppercase; color: #F97316; margin: 1.6rem 0 0.6rem 0; }
+@keyframes fadeSlideDown {
+  from { opacity: 0; transform: translateY(-18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes glowBorder {
+  0%, 100% { box-shadow: 0 0 8px rgba(124,58,237,0.4), inset 0 0 8px rgba(124,58,237,0.05); }
+  50%       { box-shadow: 0 0 20px rgba(167,139,250,0.5), inset 0 0 12px rgba(124,58,237,0.08); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes badgePop {
+  0%   { transform: scale(0.8); opacity: 0; }
+  60%  { transform: scale(1.1); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* ── Header wrapper ── */
+.vhq-header {
+  position: relative;
+  text-align: center;
+  padding: 3rem 1rem 2.2rem 1rem;
+  overflow: hidden;
+  animation: fadeSlideDown 0.7s ease both;
+}
+
+/* Scanline overlay */
+.vhq-header::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(167,139,250,0.6), transparent);
+  animation: scanline 4s linear infinite;
+  pointer-events: none;
+}
+
+/* Top rule */
+.vhq-header::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 10%; right: 10%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(124,58,237,0.5), transparent);
+}
+
+.vhq-eyebrow {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(167,139,250,0.7);
+  margin-bottom: 0.8rem;
+  animation: fadeSlideDown 0.6s ease 0.1s both;
+}
+
+.vhq-logo {
+  font-family: 'Orbitron', monospace;
+  font-size: clamp(1.55rem, 6vw, 2.3rem);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: #fff;
+  animation: neonPulse 3s ease-in-out infinite, fadeSlideDown 0.7s ease 0.2s both;
+  line-height: 1.1;
+  user-select: none;
+}
+
+.vhq-tagline {
+  font-size: 0.82rem;
+  color: rgba(167,139,250,0.6);
+  letter-spacing: 0.06em;
+  margin-top: 0.7rem;
+  font-family: 'IBM Plex Mono', monospace;
+  animation: fadeSlideDown 0.7s ease 0.35s both;
+}
+
+.vhq-version {
+  display: inline-block;
+  background: rgba(124,58,237,0.15);
+  border: 1px solid rgba(124,58,237,0.35);
+  color: #a78bfa;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  padding: 0.2rem 0.7rem;
+  border-radius: 20px;
+  margin-top: 0.7rem;
+  animation: badgePop 0.5s ease 0.5s both;
+}
+
+/* ══════════════════════════════════════════
+   GLASS PANELS
+══════════════════════════════════════════ */
+.glass-card {
+  background: rgba(255,255,255,0.03);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 18px;
+  padding: 1.8rem 1.6rem;
+  margin-bottom: 1.1rem;
+  animation: glowBorder 4s ease-in-out infinite, fadeSlideUp 0.5s ease both;
+  position: relative;
+  overflow: hidden;
+}
+
+/* inner top glow line */
+.glass-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 15%; right: 15%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(167,139,250,0.4), transparent);
+}
+
+.glass-card-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #7c3aed;
+  margin-bottom: 1rem;
+}
+
+/* ══════════════════════════════════════════
+   INPUT OVERRIDES
+══════════════════════════════════════════ */
 .stTextInput > div > div > input,
 .stTextArea > div > div > textarea,
-.stNumberInput > div > div > input,
-.stSelectbox > div > div { background-color: #161616 !important; border: 1px solid #252525 !important; border-radius: 8px !important; color: #EDECE8 !important; font-size: 0.92rem !important; }
+.stDateInput > div > div > input,
+.stSelectbox > div > div {
+  background: rgba(255,255,255,0.04) !important;
+  border: 1px solid rgba(124,58,237,0.3) !important;
+  border-radius: 10px !important;
+  color: #E8E6F0 !important;
+  font-family: 'Space Grotesk', sans-serif !important;
+  font-size: 0.92rem !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
 .stTextInput > div > div > input:focus,
-.stTextArea > div > div > textarea:focus,
-.stNumberInput > div > div > input:focus { border-color: #F97316 !important; box-shadow: 0 0 0 2px rgba(249,115,22,0.15) !important; }
-label { color: #999 !important; font-size: 0.82rem !important; font-weight: 500 !important; }
+.stTextArea > div > div > textarea:focus {
+  border-color: #7c3aed !important;
+  box-shadow: 0 0 0 3px rgba(124,58,237,0.18) !important;
+  outline: none !important;
+}
+label, .stSelectbox label, .stTextInput label,
+.stTextArea label, .stDateInput label {
+  color: rgba(167,139,250,0.75) !important;
+  font-size: 0.8rem !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.03em !important;
+}
 
-.stButton > button[kind="primary"] { width: 100%; background: #F97316 !important; color: #000 !important; border: none !important; border-radius: 8px !important; font-weight: 700 !important; font-size: 0.95rem !important; padding: 0.75rem 1rem !important; letter-spacing: 0.03em; font-family: 'IBM Plex Mono', monospace !important; }
-.stButton > button[kind="primary"]:hover { background: #ea6a0d !important; }
+/* ══════════════════════════════════════════
+   BUTTONS
+══════════════════════════════════════════ */
+/* Primary CTA */
+.stButton > button[kind="primary"] {
+  width: 100%;
+  background: linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #7c3aed 100%) !important;
+  background-size: 200% auto !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 12px !important;
+  font-family: 'Space Grotesk', sans-serif !important;
+  font-weight: 700 !important;
+  font-size: 0.95rem !important;
+  padding: 0.75rem 1.2rem !important;
+  letter-spacing: 0.04em;
+  transition: background-position 0.4s ease, transform 0.15s ease, box-shadow 0.2s ease !important;
+  box-shadow: 0 4px 20px rgba(124,58,237,0.35) !important;
+}
+.stButton > button[kind="primary"]:hover {
+  background-position: right center !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 6px 28px rgba(124,58,237,0.5) !important;
+}
+.stButton > button[kind="primary"]:active {
+  transform: translateY(0) !important;
+}
 
-.score-ring { display: flex; align-items: center; gap: 1.2rem; background: #0D0D0D; border: 1px solid #1E1E1E; border-radius: 12px; padding: 1.2rem 1.4rem; margin-bottom: 1rem; }
-.score-number { font-family: 'Syne', sans-serif; font-size: 3rem; font-weight: 800; line-height: 1; min-width: 80px; }
-.score-label { font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase; color: #666; margin-bottom: 0.2rem; }
-.score-health { font-size: 1.1rem; font-weight: 700; }
+/* Secondary */
+.stButton > button[kind="secondary"] {
+  width: 100%;
+  background: rgba(255,255,255,0.04) !important;
+  color: rgba(167,139,250,0.85) !important;
+  border: 1px solid rgba(124,58,237,0.3) !important;
+  border-radius: 12px !important;
+  font-family: 'Space Grotesk', sans-serif !important;
+  font-size: 0.88rem !important;
+  transition: border-color 0.2s ease, background 0.2s ease !important;
+}
+.stButton > button[kind="secondary"]:hover {
+  border-color: rgba(124,58,237,0.6) !important;
+  background: rgba(124,58,237,0.08) !important;
+}
 
-.flag-chip { display: inline-flex; align-items: flex-start; gap: 0.4rem; background: #161616; border-radius: 6px; padding: 0.5rem 0.85rem; margin: 0.3rem 0.3rem 0 0; font-size: 0.82rem; border-left: 3px solid transparent; width: 100%; box-sizing: border-box; }
-.flag-critical { border-left-color: #EF4444; }
-.flag-warning  { border-left-color: #F97316; }
-.flag-info     { border-left-color: #3B82F6; }
-.flag-metric   { font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; color: #888; }
-.flag-fault    { color: #EDECE8; margin-top: 0.2rem; }
+/* ══════════════════════════════════════════
+   SECTION LABEL
+══════════════════════════════════════════ */
+.section-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(124,58,237,0.8);
+  margin: 1.8rem 0 0.7rem 0;
+}
 
-.verdict-block { background: #0D0D0D; border-left: 3px solid #F97316; border-radius: 0 8px 8px 0; padding: 1rem 1.1rem; font-size: 0.92rem; line-height: 1.65; color: #CCC; margin: 0.8rem 0; }
+/* ══════════════════════════════════════════
+   AUTH TAB TOGGLE
+══════════════════════════════════════════ */
+.auth-toggle {
+  display: flex;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(124,58,237,0.2);
+  border-radius: 12px;
+  padding: 4px;
+  margin-bottom: 1.4rem;
+  gap: 4px;
+}
+.auth-tab {
+  flex: 1;
+  text-align: center;
+  padding: 0.5rem;
+  border-radius: 9px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: rgba(167,139,250,0.5);
+}
+.auth-tab-active {
+  background: linear-gradient(135deg, #7c3aed, #a855f7);
+  color: #fff;
+  box-shadow: 0 2px 12px rgba(124,58,237,0.4);
+}
 
-.badge { display: inline-block; font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; padding: 0.25rem 0.7rem; border-radius: 4px; font-weight: 600; }
-.badge-suppressed { background: #2D1111; color: #EF4444; }
-.badge-neutral    { background: #1A1A1A; color: #888; }
-.badge-favoured   { background: #102010; color: #22C55E; }
-.badge-viral      { background: #1A1000; color: #F97316; }
-.badge-poor       { background: #2D1111; color: #EF4444; }
-.badge-fair       { background: #1A1500; color: #EAB308; }
-.badge-good       { background: #102010; color: #22C55E; }
-.badge-excellent  { background: #0D1A10; color: #4ADE80; }
+/* ══════════════════════════════════════════
+   DASHBOARD NAV PILLS
+══════════════════════════════════════════ */
+.nav-bar {
+  display: flex;
+  gap: 0.5rem;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(124,58,237,0.15);
+  border-radius: 14px;
+  padding: 6px;
+  margin-bottom: 1.4rem;
+  flex-wrap: wrap;
+}
+.nav-pill {
+  flex: 1;
+  min-width: 80px;
+  text-align: center;
+  padding: 0.45rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: rgba(167,139,250,0.5);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+.nav-pill-active {
+  background: rgba(124,58,237,0.2);
+  color: #c4b5fd;
+  border: 1px solid rgba(124,58,237,0.4);
+}
 
-.step-card { display: flex; gap: 1rem; background: #111; border: 1px solid #1E1E1E; border-radius: 10px; padding: 1rem 1.1rem; margin-bottom: 0.6rem; }
-.step-num { font-family: 'IBM Plex Mono', monospace; font-size: 1.2rem; font-weight: 600; color: #F97316; min-width: 2rem; padding-top: 0.05rem; }
-.step-action { font-weight: 600; color: #EDECE8; font-size: 0.92rem; margin-bottom: 0.3rem; }
-.step-detail { color: #888; font-size: 0.85rem; line-height: 1.55; }
-.step-impact { font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; color: #22C55E; margin-top: 0.4rem; }
+/* ══════════════════════════════════════════
+   PROFILE AVATAR RING
+══════════════════════════════════════════ */
+.avatar-ring {
+  width: 72px; height: 72px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #7c3aed, #a855f7, #ec4899);
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 0.6rem auto;
+  font-size: 1.8rem;
+  box-shadow: 0 0 20px rgba(124,58,237,0.4);
+  animation: glowBorder 3s ease-in-out infinite;
+}
 
-.title-chip { background: #0D0D0D; border: 1px solid #252525; border-radius: 8px; padding: 0.75rem 1rem; font-size: 0.92rem; color: #EDECE8; margin-bottom: 0.5rem; line-height: 1.4; }
-.hook-card { background: #0D0D0D; border: 1px solid #252525; border-radius: 10px; padding: 1rem 1.1rem; margin-bottom: 0.6rem; }
-.hook-type { font-family: 'IBM Plex Mono', monospace; font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: #F97316; margin-bottom: 0.5rem; }
-.hook-script { font-size: 0.92rem; color: #EDECE8; line-height: 1.55; }
+/* ══════════════════════════════════════════
+   STAT CHIPS
+══════════════════════════════════════════ */
+.stat-row {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+}
+.stat-chip {
+  flex: 1;
+  background: rgba(124,58,237,0.08);
+  border: 1px solid rgba(124,58,237,0.2);
+  border-radius: 10px;
+  padding: 0.6rem 0.4rem;
+  text-align: center;
+}
+.stat-chip-value {
+  font-family: 'Orbitron', monospace;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #a78bfa;
+}
+.stat-chip-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(167,139,250,0.5);
+  margin-top: 0.15rem;
+}
 
-.provider-pill { display: inline-block; background: #1A0F00; color: #F97316; border: 1px solid #3A2000; border-radius: 4px; font-family: 'IBM Plex Mono', monospace; font-size: 0.68rem; letter-spacing: 0.06em; padding: 0.2rem 0.6rem; }
+/* ══════════════════════════════════════════
+   AGE GATE BANNER
+══════════════════════════════════════════ */
+.age-gate-banner {
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.35);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  font-size: 0.85rem;
+  color: #fca5a5;
+  margin-bottom: 1rem;
+  animation: fadeSlideUp 0.3s ease both;
+}
 
-hr { border-color: #1A1A1A; margin: 1.5rem 0; }
-.stAlert { border-radius: 8px !important; }
+/* ══════════════════════════════════════════
+   SUCCESS BANNER
+══════════════════════════════════════════ */
+.success-banner {
+  background: rgba(34,197,94,0.08);
+  border: 1px solid rgba(34,197,94,0.3);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  font-size: 0.85rem;
+  color: #86efac;
+  margin-bottom: 1rem;
+  animation: fadeSlideUp 0.3s ease both;
+}
+
+/* ══════════════════════════════════════════
+   SHIMMER DIVIDER
+══════════════════════════════════════════ */
+.shimmer-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(167,139,250,0.4) 50%, transparent);
+  margin: 1.4rem 0;
+  background-size: 200% auto;
+  animation: shimmer 3s linear infinite;
+}
+
+/* ══════════════════════════════════════════
+   FOOTER
+══════════════════════════════════════════ */
+.vhq-footer {
+  text-align: center;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  color: rgba(124,58,237,0.35);
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(124,58,237,0.1);
+}
+
+/* Misc */
+.stAlert { border-radius: 10px !important; }
+hr { border-color: rgba(124,58,237,0.12); }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Session state ─────────────────────────────────────────────────────────────
-if "audit_result" not in st.session_state:
-    st.session_state.audit_result = None
 
-# ── Sidebar — Settings ────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("### ⚙️ Settings")
-    st.markdown("---")
-
-    st.markdown("**AI Engine**")
-    provider_display = {PROVIDER_LABELS[p]: p for p in Provider}
-    selected_label = st.selectbox("Active provider", list(provider_display.keys()), label_visibility="collapsed")
-    active_provider: Provider = provider_display[selected_label]
-
-    st.markdown(f"**API Key · {selected_label.split('·')[0].strip()}**")
-    api_key_input = st.text_input("API key", type="password", placeholder="Paste your API key here…", label_visibility="collapsed")
-
-    if api_key_input:
-        st.markdown('<div class="provider-pill">✓ KEY LOADED</div>', unsafe_allow_html=True)
-    else:
-        st.caption("No key entered.")
-
-    st.markdown("---")
-    st.caption("Keys are stored in your session only. Never logged or transmitted.")
-    st.markdown("**Get API Keys**")
-    st.markdown(
-        "- [OpenAI](https://platform.openai.com/api-keys)\n"
-        "- [Anthropic](https://console.anthropic.com/)\n"
-        "- [Google AI Studio](https://aistudio.google.com/app/apikey) *(Free)*\n"
-        "- [Groq Cloud](https://console.groq.com/keys) *(Free)*"
+# ═══════════════════════════════════════════════════════════════
+# SUPABASE CLIENT
+# ═══════════════════════════════════════════════════════════════
+@st.cache_resource
+def init_supabase() -> Client:
+    return create_client(
+        st.secrets["SUPABASE_URL"],
+        st.secrets["SUPABASE_ANON_KEY"],
     )
 
-# ── Hero ──────────────────────────────────────────────────────────────────────
+supabase = init_supabase()
+
+
+# ═══════════════════════════════════════════════════════════════
+# AUTH HELPERS
+# ═══════════════════════════════════════════════════════════════
+def auth_signup(email: str, password: str):
+    return supabase.auth.sign_up({"email": email, "password": password})
+
+def auth_login(email: str, password: str):
+    return supabase.auth.sign_in_with_password({"email": email, "password": password})
+
+def auth_logout():
+    supabase.auth.sign_out()
+
+def get_profile(user_id: str) -> dict | None:
+    res = supabase.table("profiles").select("*").eq("id", user_id).execute()
+    return res.data[0] if res.data else None
+
+def save_profile(user_id: str, full_name: str, bio: str, dob: str) -> dict:
+    """Upsert the profile row after successful onboarding."""
+    return supabase.table("profiles").upsert({
+        "id": user_id,
+        "full_name": full_name,
+        "bio": bio,
+        "dob": dob,
+        "onboarded": True,
+        "tier": "free",
+        "updated_at": datetime.utcnow().isoformat(),
+    }).execute()
+
+def age_from_dob(dob: date) -> int:
+    today = date.today()
+    return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+
+
+# ═══════════════════════════════════════════════════════════════
+# SESSION STATE INIT
+# ═══════════════════════════════════════════════════════════════
+defaults = {
+    "authenticated": False,
+    "user_id": None,
+    "user_email": None,
+    "onboarded": False,
+    "profile": None,
+    "auth_mode": "login",     # "login" | "signup"
+    "active_tab": "Audit",   # dashboard tab
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+
+# ═══════════════════════════════════════════════════════════════
+# VHQ HEADER (always visible)
+# ═══════════════════════════════════════════════════════════════
 st.markdown("""
-<div class="hero">
-  <div class="hero-eyebrow">⚡ AI-Powered Growth Intelligence</div>
-  <h1 class="hero-title">Social Media<br><span>Audit & Viral Engine</span></h1>
-  <p class="hero-sub">Feed your metrics. Get an algorithmic autopsy, suppression diagnosis,<br>a step-by-step action plan, and viral assets — in seconds.</p>
+<div class="vhq-header">
+  <div class="vhq-eyebrow">⬡ Powered by Multi-LLM Intelligence</div>
+  <div class="vhq-logo">VHQ · SOCIAL<br>AUDITOR</div>
+  <div class="vhq-tagline">Algorithmic Diagnostics · Viral Growth Engine · AI Analytics</div>
+  <div class="vhq-version">v2.0 · PHASE 1 + 2 LIVE</div>
 </div>
 """, unsafe_allow_html=True)
 
-# ── Platform selector ─────────────────────────────────────────────────────────
-st.markdown('<div class="section-label">01 · Select Platform</div>', unsafe_allow_html=True)
-platform_display = {f"{PLATFORM_ICONS[p]}  {PLATFORM_LABELS[p]}": p for p in Platform}
-active_platform: Platform = platform_display[st.selectbox("Platform", list(platform_display.keys()), label_visibility="collapsed")]
 
-# ── Dynamic metric forms ──────────────────────────────────────────────────────
-st.markdown('<div class="section-label">02 · Enter Your Metrics</div>', unsafe_allow_html=True)
+# ═══════════════════════════════════════════════════════════════
+# ── PAGE: AUTH ──────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+if not st.session_state.authenticated:
 
-metrics_obj = None
-input_error = None
+    is_login = st.session_state.auth_mode == "login"
 
-if active_platform == Platform.YOUTUBE_LONG:
-    niche = st.text_input("Your niche / content topic", placeholder="e.g. Personal Finance for Gen Z")
-    description = st.text_area("What is this video about?", placeholder="e.g. How I saved ₹1 Lakh in 6 months on a ₹25K salary", height=80)
-    c1, c2, c3 = st.columns(3)
-    impressions = c1.number_input("Impressions", min_value=0, value=10000)
-    views       = c2.number_input("Views", min_value=0, value=500)
-    ctr         = c3.number_input("CTR %", min_value=0.0, max_value=100.0, value=5.0, step=0.1, format="%.2f")
-    c4, c5 = st.columns(2)
-    avd_pct = c4.number_input("AVD %", min_value=0.0, max_value=100.0, value=42.0, step=0.1, format="%.1f")
-    avd_min = c5.number_input("AVD (minutes)", min_value=0.0, value=3.5, step=0.1, format="%.1f")
-    c6, c7, c8 = st.columns(3)
-    likes    = c6.number_input("Likes", min_value=0, value=40)
-    comments = c7.number_input("Comments", min_value=0, value=8)
-    subs     = c8.number_input("Subs Gained", min_value=0, value=5)
-    try:
-        metrics_obj = YouTubeLongMetrics(niche=niche, content_description=description, impressions=impressions, views=views, ctr_percent=ctr, avd_percent=avd_pct, avd_minutes=avd_min, likes=likes, comments=comments, subscribers_gained=subs)
-    except ValueError as e:
-        input_error = str(e)
+    # Toggle tabs
+    st.markdown(f"""
+    <div class="auth-toggle">
+      <div class="auth-tab {'auth-tab-active' if is_login else ''}">Sign In</div>
+      <div class="auth-tab {'auth-tab-active' if not is_login else ''}">Create Account</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-elif active_platform == Platform.YOUTUBE_SHORTS:
-    niche = st.text_input("Your niche / content topic", placeholder="e.g. Gym Motivation & Fitness Tips")
-    description = st.text_area("What is this Short about?", placeholder="e.g. 5 foods that destroy your testosterone", height=80)
-    c1, c2 = st.columns(2)
-    views   = c1.number_input("Views", min_value=0, value=15000)
-    avd_pct = c2.number_input("AVD %", min_value=0.0, max_value=100.0, value=68.0, step=0.1)
-    c3, c4, c5 = st.columns(3)
-    likes    = c3.number_input("Likes", min_value=0, value=320)
-    comments = c4.number_input("Comments", min_value=0, value=45)
-    shares   = c5.number_input("Shares", min_value=0, value=18)
-    subs     = st.number_input("Subscribers Gained", min_value=0, value=60)
-    try:
-        metrics_obj = YouTubeShortsMetrics(niche=niche, content_description=description, views=views, likes=likes, comments=comments, shares=shares, avd_percent=avd_pct, subscribers_gained=subs)
-    except ValueError as e:
-        input_error = str(e)
+    col_a, col_b = st.columns(2)
+    if col_a.button("Sign In", type="primary" if is_login else "secondary", use_container_width=True):
+        st.session_state.auth_mode = "login"
+        st.rerun()
+    if col_b.button("Create Account", type="primary" if not is_login else "secondary", use_container_width=True):
+        st.session_state.auth_mode = "signup"
+        st.rerun()
 
-elif active_platform in (Platform.INSTAGRAM, Platform.THREADS):
-    niche = st.text_input("Your niche / content topic", placeholder="e.g. Productivity & Study Tips")
-    description = st.text_area("What is this post / Reel about?", placeholder="e.g. Morning routine of a CA student", height=80)
-    content_type = st.selectbox("Content type", ["Reel", "Carousel", "Static Post"])
-    c1, c2 = st.columns(2)
-    plays    = c1.number_input("Plays / Reach", min_value=0, value=8000)
-    likes    = c2.number_input("Likes", min_value=0, value=210)
-    c3, c4, c5 = st.columns(3)
-    comments = c3.number_input("Comments", min_value=0, value=28)
-    saves    = c4.number_input("Saves", min_value=0, value=95)
-    shares   = c5.number_input("Shares", min_value=0, value=40)
-    c6, c7 = st.columns(2)
-    follows = c6.number_input("Follows Gained", min_value=0, value=35)
-    visits  = c7.number_input("Profile Visits", min_value=0, value=180)
-    try:
-        metrics_obj = InstagramMetrics(platform=active_platform, niche=niche, content_description=description, content_type=content_type, plays_or_reach=plays, likes=likes, comments=comments, saves=saves, shares=shares, follows_gained=follows, profile_visits=visits)
-    except ValueError as e:
-        input_error = str(e)
+    st.markdown('<div class="shimmer-divider"></div>', unsafe_allow_html=True)
 
-elif active_platform in (Platform.WHATSAPP, Platform.MESSENGER):
-    niche = st.text_input("Your niche / business type", placeholder="e.g. EdTech – Online Coaching for UPSC")
-    goal  = st.text_input("Campaign goal", placeholder="e.g. Flash sale announcement, Re-engagement, New batch launch")
-    c1, c2 = st.columns(2)
-    sent   = c1.number_input("Messages Sent", min_value=0, value=2400)
-    opened = c2.number_input("Opened / Read", min_value=0, value=1800)
-    c3, c4 = st.columns(2)
-    open_rt  = c3.number_input("Open Rate %", min_value=0.0, max_value=100.0, value=75.0, step=0.1)
-    replies  = c4.number_input("Replies", min_value=0, value=90)
-    c5, c6, c7 = st.columns(3)
-    reply_rt = c5.number_input("Reply Rate %", min_value=0.0, max_value=100.0, value=3.75, step=0.1)
-    clicks   = c6.number_input("Link Clicks", min_value=0, value=120)
-    opt_outs = c7.number_input("Opt-Outs", min_value=0, value=14)
-    try:
-        metrics_obj = MessagingMetrics(platform=active_platform, niche=niche, campaign_goal=goal, messages_sent=sent, messages_opened=opened, open_rate=open_rt, replies=replies, reply_rate=reply_rt, link_clicks=clicks, opt_outs=opt_outs)
-    except ValueError as e:
-        input_error = str(e)
+    # Auth form
+    st.markdown(f'<div class="glass-card"><div class="glass-card-label">{"— Sign In —" if is_login else "— New Account —"}</div>', unsafe_allow_html=True)
 
-if input_error:
-    st.error(f"⚠️ Input error: {input_error}")
+    email    = st.text_input("Email address", placeholder="you@email.com", key="auth_email")
+    password = st.text_input("Password", type="password", placeholder="Min. 6 characters", key="auth_pw")
 
-st.markdown("<br>", unsafe_allow_html=True)
+    if is_login:
+        submit = st.button("⬡  Sign In to VHQ", type="primary", use_container_width=True)
+    else:
+        submit = st.button("⬡  Create My Account", type="primary", use_container_width=True)
 
-# ── Generate ──────────────────────────────────────────────────────────────────
-run_audit = st.button("⚡ Run Full AI Audit", type="primary", use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-if run_audit:
-    if not api_key_input or not api_key_input.strip():
-        st.error(f"⚠️ No API key for **{PROVIDER_LABELS[active_provider]}**. Add it in the Settings panel.")
-        st.stop()
-    if input_error or metrics_obj is None:
-        st.error("⚠️ Fix the input errors above before running the audit.")
-        st.stop()
-    with st.spinner("Running algorithmic audit… 10–25 seconds"):
-        try:
-            result = run_prompt(
-                provider=active_provider,
-                api_key=api_key_input.strip(),
-                prompt=build_prompt(metrics_obj),
-                max_tokens=2000,
-            )
-            st.session_state.audit_result = result
-        except ValueError as e:
-            st.error(f"⚠️ {e}"); st.stop()
-        except RuntimeError as e:
-            st.error(f"⚠️ {e}"); st.stop()
-        except Exception as e:
-            st.error(f"⚠️ Unexpected error: {e}"); st.stop()
+    if submit:
+        if not email.strip() or not password.strip():
+            st.markdown('<div class="age-gate-banner">⚠ Please fill in both email and password.</div>', unsafe_allow_html=True)
+        elif len(password) < 6:
+            st.markdown('<div class="age-gate-banner">⚠ Password must be at least 6 characters.</div>', unsafe_allow_html=True)
+        else:
+            try:
+                if is_login:
+                    res  = auth_login(email.strip().lower(), password)
+                    user = res.user
+                    if user:
+                        st.session_state.authenticated = True
+                        st.session_state.user_id       = user.id
+                        st.session_state.user_email    = user.email
+                        profile = get_profile(user.id)
+                        st.session_state.profile    = profile
+                        st.session_state.onboarded  = bool(profile and profile.get("onboarded"))
+                        st.rerun()
+                    else:
+                        st.markdown('<div class="age-gate-banner">⚠ Invalid email or password.</div>', unsafe_allow_html=True)
+                else:
+                    res  = auth_signup(email.strip().lower(), password)
+                    user = res.user
+                    if user:
+                        st.markdown('<div class="success-banner">✓ Account created! Check your email to confirm, then sign in.</div>', unsafe_allow_html=True)
+                        st.session_state.auth_mode = "login"
+                    else:
+                        st.markdown('<div class="age-gate-banner">⚠ Could not create account. Try a different email.</div>', unsafe_allow_html=True)
+            except Exception as e:
+                msg = str(e).lower()
+                if "already registered" in msg or "already exists" in msg:
+                    st.markdown('<div class="age-gate-banner">⚠ Email already registered. Sign in instead.</div>', unsafe_allow_html=True)
+                elif "invalid login" in msg or "invalid credentials" in msg:
+                    st.markdown('<div class="age-gate-banner">⚠ Wrong email or password.</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div class="age-gate-banner">⚠ Auth error: {str(e)[:120]}</div>', unsafe_allow_html=True)
 
-# ── Results renderer ──────────────────────────────────────────────────────────
-def _score_color(s: int) -> str:
-    return "#22C55E" if s >= 75 else ("#F97316" if s >= 50 else "#EF4444")
+    st.markdown("""
+    <div class="vhq-footer">
+      VHQ · SOCIAL AUDITOR &nbsp;·&nbsp; PHASE 1 + 2 &nbsp;·&nbsp; BUILD 2025
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop()
 
-def render_results(data: dict):
-    diag  = data.get("diagnostics", {})
-    behav = data.get("behavioral_analysis", {})
-    plan  = data.get("action_plan", {})
-    viral = data.get("viral_assets", {})
 
-    # 1. Diagnostics
-    st.markdown('<div class="section-label">Diagnostics</div>', unsafe_allow_html=True)
-    score = diag.get("overall_health_score", 0)
-    sc = _score_color(score)
-    st.markdown(f"""<div class="score-ring">
-      <div class="score-number" style="color:{sc}">{score}</div>
-      <div>
-        <div class="score-label">Overall Health Score</div>
-        <div class="score-health" style="color:{sc}">{diag.get("health_label","—")}</div>
-        <div style="font-size:0.82rem;color:#666;margin-top:0.3rem;">Primary bottleneck: {diag.get("primary_bottleneck","—")}</div>
+# ═══════════════════════════════════════════════════════════════
+# ── PAGE: PROFILE ONBOARDING ───────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+if not st.session_state.onboarded:
+
+    st.markdown('<div class="section-label">⬡ &nbsp; Complete Your Profile</div>', unsafe_allow_html=True)
+    st.markdown('<div class="glass-card"><div class="glass-card-label">— Profile Setup —</div>', unsafe_allow_html=True)
+
+    full_name = st.text_input("Full Name", placeholder="e.g. Vaibhav Sharma", key="ob_name")
+    bio       = st.text_area("Bio", placeholder="Tell us what you create or build…", height=90, key="ob_bio")
+    dob       = st.date_input(
+        "Date of Birth",
+        value=date(2000, 1, 1),
+        min_value=date(1900, 1, 1),
+        max_value=date.today(),
+        key="ob_dob",
+    )
+
+    # Live age-gate feedback
+    if dob:
+        age = age_from_dob(dob)
+        if age < 13:
+            st.markdown(f'<div class="age-gate-banner">🔒 You must be 13 or older to use VHQ. Detected age: {age}.</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="success-banner">✓ Age verified &nbsp;({age} years old)</div>', unsafe_allow_html=True)
+
+    save = st.button("⬡  Save Profile & Enter VHQ", type="primary", use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if save:
+        if not full_name.strip():
+            st.markdown('<div class="age-gate-banner">⚠ Full name is required.</div>', unsafe_allow_html=True)
+        elif not dob:
+            st.markdown('<div class="age-gate-banner">⚠ Date of birth is required.</div>', unsafe_allow_html=True)
+        elif age_from_dob(dob) < 13:
+            st.markdown('<div class="age-gate-banner">🔒 You must be 13 or older to continue.</div>', unsafe_allow_html=True)
+        else:
+            try:
+                save_profile(
+                    user_id=st.session_state.user_id,
+                    full_name=full_name.strip(),
+                    bio=bio.strip(),
+                    dob=str(dob),
+                )
+                st.session_state.onboarded = True
+                st.session_state.profile   = get_profile(st.session_state.user_id)
+                st.markdown('<div class="success-banner">✓ Profile saved! Loading your dashboard…</div>', unsafe_allow_html=True)
+                st.rerun()
+            except Exception as e:
+                st.markdown(f'<div class="age-gate-banner">⚠ Could not save profile: {str(e)[:120]}</div>', unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="vhq-footer">VHQ · SOCIAL AUDITOR &nbsp;·&nbsp; SETUP</div>
+    """, unsafe_allow_html=True)
+    st.stop()
+
+
+# ═══════════════════════════════════════════════════════════════
+# ── PAGE: DASHBOARD (authenticated + onboarded) ────────────────
+# ═══════════════════════════════════════════════════════════════
+profile    = st.session_state.profile or {}
+full_name  = profile.get("full_name", "Creator")
+tier       = profile.get("tier", "free").upper()
+initials   = "".join(w[0] for w in full_name.split()[:2]).upper() or "VH"
+tier_color = "#f59e0b" if tier == "FREE" else "#a78bfa"
+
+# ── Profile card ──────────────────────────────────────────────
+st.markdown(f"""
+<div class="glass-card" style="text-align:center; animation-delay:0.05s">
+  <div class="avatar-ring">{initials}</div>
+  <div style="font-size:1.05rem; font-weight:700; letter-spacing:0.02em;">{full_name}</div>
+  <div style="font-size:0.78rem; color:rgba(167,139,250,0.6); margin:0.2rem 0 0.5rem;">
+    {st.session_state.user_email}
+  </div>
+  <span style="
+    display:inline-block;
+    background:rgba(124,58,237,0.15);
+    border:1px solid {tier_color}55;
+    color:{tier_color};
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.62rem;
+    letter-spacing:0.14em;
+    padding:0.2rem 0.8rem;
+    border-radius:20px;
+  ">{tier} PLAN</span>
+  <div class="stat-row">
+    <div class="stat-chip">
+      <div class="stat-chip-value">0</div>
+      <div class="stat-chip-label">Audits</div>
+    </div>
+    <div class="stat-chip">
+      <div class="stat-chip-value">—</div>
+      <div class="stat-chip-label">Reports</div>
+    </div>
+    <div class="stat-chip">
+      <div class="stat-chip-value">∞</div>
+      <div class="stat-chip-label">Potential</div>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ── Nav tabs ──────────────────────────────────────────────────
+tabs = ["⬡ Audit", "◈ Reports", "◉ Profile", "⚙ Settings"]
+tab_keys = ["Audit", "Reports", "Profile", "Settings"]
+
+active_tab = st.session_state.active_tab
+
+st.markdown('<div class="nav-bar">', unsafe_allow_html=True)
+cols = st.columns(len(tabs))
+for i, (col, label, key) in enumerate(zip(cols, tabs, tab_keys)):
+    is_active = (active_tab == key)
+    if col.button(label, key=f"tab_{key}", type="secondary", use_container_width=True):
+        st.session_state.active_tab = key
+        st.rerun()
+st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown('<div class="shimmer-divider"></div>', unsafe_allow_html=True)
+
+
+# ── TAB: AUDIT ────────────────────────────────────────────────
+if active_tab == "Audit":
+    st.markdown('<div class="section-label">⬡ &nbsp; Platform Audit Engine</div>', unsafe_allow_html=True)
+    st.markdown('<div class="glass-card"><div class="glass-card-label">— Audit Module —</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div style="text-align:center; padding: 2rem 1rem; color: rgba(167,139,250,0.5);">
+      <div style="font-size:2rem; margin-bottom:0.7rem;">⬡</div>
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; letter-spacing:0.1em;">
+        AUDIT ENGINE · PHASE 3 COMING NEXT
       </div>
-    </div>""", unsafe_allow_html=True)
+      <div style="font-size:0.82rem; margin-top:0.5rem; color:rgba(167,139,250,0.35);">
+        Platform selector, metric inputs, and AI diagnostics will live here.
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    for flag in diag.get("flags", []):
-        sev = flag.get("severity", "Info").lower()
-        cls = {"critical": "flag-critical", "warning": "flag-warning", "info": "flag-info"}.get(sev, "flag-info")
-        icon = {"critical": "🔴", "warning": "🟠", "info": "🔵"}.get(sev, "○")
-        st.markdown(f"""<div class="flag-chip {cls}"><div>
-          <div class="flag-metric">{icon} {flag.get("metric","—")} · observed: {flag.get("value","—")} · target: {flag.get("benchmark","—")}</div>
-          <div class="flag-fault">{flag.get("fault","—")}</div>
-        </div></div>""", unsafe_allow_html=True)
+# ── TAB: REPORTS ─────────────────────────────────────────────
+elif active_tab == "Reports":
+    st.markdown('<div class="section-label">◈ &nbsp; Audit Reports</div>', unsafe_allow_html=True)
+    st.markdown('<div class="glass-card"><div class="glass-card-label">— Reports —</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div style="text-align:center; padding:2rem 1rem; color:rgba(167,139,250,0.4);">
+      <div style="font-size:0.82rem; font-family:'IBM Plex Mono',monospace; letter-spacing:0.1em;">
+        NO REPORTS YET · RUN YOUR FIRST AUDIT
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    # 2. Behavioral analysis
-    st.markdown('<div class="section-label">Behavioral Analysis</div>', unsafe_allow_html=True)
-    algo = behav.get("algorithm_status", "Neutral")
-    aud  = behav.get("audience_signal_quality", "Fair")
-    con  = behav.get("content_signal_quality", "Fair")
-    ALGO = {"suppressed":"badge-suppressed","neutral":"badge-neutral","favoured":"badge-favoured","viral":"badge-viral"}
-    SIG  = {"poor":"badge-poor","fair":"badge-fair","good":"badge-good","excellent":"badge-excellent"}
+# ── TAB: PROFILE ─────────────────────────────────────────────
+elif active_tab == "Profile":
+    st.markdown('<div class="section-label">◉ &nbsp; Your Profile</div>', unsafe_allow_html=True)
+    st.markdown('<div class="glass-card"><div class="glass-card-label">— Account Details —</div>', unsafe_allow_html=True)
 
-    c1, c2, c3 = st.columns(3)
-    for col, lbl, val, mapping in [
-        (c1, "Algorithm Status", algo, ALGO),
-        (c2, "Audience Signal",  aud,  SIG),
-        (c3, "Content Signal",   con,  SIG),
-    ]:
-        col.markdown(f"""<div style="text-align:center">
-          <div class="score-label" style="text-align:center">{lbl}</div>
-          <div style="margin-top:0.4rem"><span class="badge {mapping.get(val.lower(),'badge-neutral')}">{val}</span></div>
-        </div>""", unsafe_allow_html=True)
+    st.markdown(f"**Full Name** &nbsp; `{profile.get('full_name','—')}`")
+    st.markdown(f"**Bio** &nbsp; {profile.get('bio','—') or '—'}")
+    st.markdown(f"**Date of Birth** &nbsp; `{profile.get('dob','—')}`")
+    st.markdown(f"**Email** &nbsp; `{st.session_state.user_email}`")
+    st.markdown(f"**Tier** &nbsp; `{tier}`")
 
-    reasons = behav.get("suppression_reasons", [])
-    if reasons:
-        st.markdown("<br>**Suppression Factors**", unsafe_allow_html=True)
-        for r in reasons:
-            st.markdown(f"- {r}")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    if behav.get("verdict"):
-        st.markdown(f'<div class="verdict-block">{behav["verdict"]}</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem;
+      color:rgba(124,58,237,0.5); text-align:center; margin-top:0.5rem; letter-spacing:0.08em;">
+      ⚠ Name/username edits limited to 2× per 10 days (Phase 3 enforcement)
+    </div>
+    """, unsafe_allow_html=True)
 
-    # 3. Action plan
-    st.markdown('<div class="section-label">Custom Action Plan</div>', unsafe_allow_html=True)
-    if plan.get("priority"):
-        st.markdown(f"**Priority level:** `{plan['priority']}`")
-    for step in plan.get("steps", []):
-        st.markdown(f"""<div class="step-card">
-          <div class="step-num">#{step.get("step_number","")}</div>
-          <div>
-            <div class="step-action">{step.get("action","")}</div>
-            <div class="step-detail">{step.get("detail","")}</div>
-            <div class="step-impact">↑ {step.get("expected_impact","")}</div>
-          </div>
-        </div>""", unsafe_allow_html=True)
+# ── TAB: SETTINGS ────────────────────────────────────────────
+elif active_tab == "Settings":
+    st.markdown('<div class="section-label">⚙ &nbsp; Settings</div>', unsafe_allow_html=True)
+    st.markdown('<div class="glass-card"><div class="glass-card-label">— Preferences —</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div style="font-family:'IBM Plex Mono',monospace; font-size:0.75rem;
+      color:rgba(167,139,250,0.45); letter-spacing:0.06em; line-height:1.8;">
+      ◉ &nbsp; AI Engine &nbsp;&nbsp;&nbsp; Backend-managed (Phase 3)<br>
+      ◉ &nbsp; Notifications &nbsp; Phase 3<br>
+      ◉ &nbsp; Upgrade to Pro &nbsp; Phase 4 (Razorpay)<br>
+      ◉ &nbsp; Ad preferences &nbsp; Phase 4
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    # 4. Viral assets
-    st.markdown('<div class="section-label">Instant Viral Assets</div>', unsafe_allow_html=True)
-    if viral.get("niche"):
-        st.markdown(f"**Niche:** {viral['niche']}")
-    if viral.get("title_variations"):
-        st.markdown("**High-Converting Titles / Subject Lines**")
-        for i, t in enumerate(viral["title_variations"], 1):
-            st.markdown(f"""<div class="title-chip"><span style="color:#F97316;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;margin-right:0.6rem;">T{i}</span>{t}</div>""", unsafe_allow_html=True)
-    if viral.get("hook_scripts"):
-        st.markdown("<br>**Hook Scripts**", unsafe_allow_html=True)
-        for hook in viral["hook_scripts"]:
-            st.markdown(f"""<div class="hook-card">
-              <div class="hook-type">{hook.get("hook_type","")}</div>
-              <div class="hook-script">"{hook.get("script","")}"</div>
-            </div>""", unsafe_allow_html=True)
+    st.markdown('<div class="shimmer-divider"></div>', unsafe_allow_html=True)
 
-    st.markdown("""<hr><p style='text-align:center;color:#333;font-size:0.75rem;font-family:"IBM Plex Mono",monospace;'>VIRAL ENGINE · AUDIT COMPLETE</p>""", unsafe_allow_html=True)
+    if st.button("⬡  Sign Out", type="secondary", use_container_width=True):
+        auth_logout()
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+        st.rerun()
 
 
-if st.session_state.audit_result:
-    st.markdown("---")
-    st.markdown('<div class="section-label">Audit Results</div>', unsafe_allow_html=True)
-    render_results(st.session_state.audit_result)
+# ── Footer ────────────────────────────────────────────────────
+st.markdown("""
+<div class="vhq-footer">
+  VHQ · SOCIAL AUDITOR &nbsp;·&nbsp; PHASE 1 + 2 COMPLETE
+  &nbsp;·&nbsp; PHASE 3 NEXT &nbsp;·&nbsp; BUILD 2025
+</div>
+""", unsafe_allow_html=True)
