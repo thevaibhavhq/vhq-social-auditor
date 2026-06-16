@@ -1,12 +1,12 @@
 """
-VHQ-SOCIAL-AUDITOR
-Phase 1 — Premium UI Shell (glassmorphic, neon 3D header, animations)
-Phase 2 — Supabase Auth (signup / login / profile onboarding with age-gate)
+VHQ-SOCIAL-AUDITOR — app.py
+Phase 1: Premium UI Shell (neon 3D header, glassmorphic design, animations)
+Phase 2: Supabase Auth (st.tabs login/signup, profile onboarding, 13+ age-gate)
 """
 
 import streamlit as st
 from supabase import create_client, Client
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 # ═══════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -19,14 +19,14 @@ st.set_page_config(
 )
 
 # ═══════════════════════════════════════════════════════════════
-# DESIGN SYSTEM
+# DESIGN SYSTEM & CSS
 # ═══════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
 /* ── Fonts ── */
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Orbitron:wght@700;900&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
-/* ── Reset & base ── */
+/* ── Base ── */
 html, body, [class*="css"] {
   font-family: 'Space Grotesk', sans-serif;
   background: #050508;
@@ -41,7 +41,7 @@ html, body, [class*="css"] {
 }
 
 /* ══════════════════════════════════════════
-   3D NEON HEADER
+   ANIMATIONS
 ══════════════════════════════════════════ */
 @keyframes neonPulse {
   0%, 100% {
@@ -65,48 +65,42 @@ html, body, [class*="css"] {
       0 6px 14px rgba(0,0,0,0.7);
   }
 }
-
 @keyframes scanline {
-  0% { transform: translateY(-100%); }
+  0%   { transform: translateY(-100%); }
   100% { transform: translateY(100vh); }
 }
-
 @keyframes fadeSlideDown {
   from { opacity: 0; transform: translateY(-18px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-
 @keyframes fadeSlideUp {
-  from { opacity: 0; transform: translateY(18px); }
+  from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-
 @keyframes glowBorder {
-  0%, 100% { box-shadow: 0 0 8px rgba(124,58,237,0.4), inset 0 0 8px rgba(124,58,237,0.05); }
-  50%       { box-shadow: 0 0 20px rgba(167,139,250,0.5), inset 0 0 12px rgba(124,58,237,0.08); }
+  0%, 100% { box-shadow: 0 0 8px rgba(124,58,237,0.35), inset 0 0 8px rgba(124,58,237,0.04); }
+  50%       { box-shadow: 0 0 22px rgba(167,139,250,0.45), inset 0 0 12px rgba(124,58,237,0.07); }
 }
-
 @keyframes shimmer {
   0%   { background-position: -200% center; }
-  100% { background-position: 200% center; }
+  100% { background-position:  200% center; }
 }
-
 @keyframes badgePop {
   0%   { transform: scale(0.8); opacity: 0; }
   60%  { transform: scale(1.1); }
-  100% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(1);   opacity: 1; }
 }
 
-/* ── Header wrapper ── */
+/* ══════════════════════════════════════════
+   3D NEON HEADER
+══════════════════════════════════════════ */
 .vhq-header {
   position: relative;
   text-align: center;
-  padding: 3rem 1rem 2.2rem 1rem;
+  padding: 2.8rem 1rem 2rem 1rem;
   overflow: hidden;
   animation: fadeSlideDown 0.7s ease both;
 }
-
-/* Scanline overlay */
 .vhq-header::before {
   content: '';
   position: absolute;
@@ -116,117 +110,140 @@ html, body, [class*="css"] {
   animation: scanline 4s linear infinite;
   pointer-events: none;
 }
-
-/* Top rule */
 .vhq-header::after {
   content: '';
   position: absolute;
   bottom: 0; left: 10%; right: 10%;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(124,58,237,0.5), transparent);
+  background: linear-gradient(90deg, transparent, rgba(124,58,237,0.45), transparent);
 }
-
 .vhq-eyebrow {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 0.65rem;
-  letter-spacing: 0.3em;
+  font-size: 0.63rem;
+  letter-spacing: 0.28em;
   text-transform: uppercase;
-  color: rgba(167,139,250,0.7);
-  margin-bottom: 0.8rem;
+  color: rgba(167,139,250,0.65);
+  margin-bottom: 0.75rem;
   animation: fadeSlideDown 0.6s ease 0.1s both;
 }
-
 .vhq-logo {
   font-family: 'Orbitron', monospace;
-  font-size: clamp(1.55rem, 6vw, 2.3rem);
+  font-size: clamp(1.5rem, 5.5vw, 2.25rem);
   font-weight: 900;
   letter-spacing: 0.08em;
   color: #fff;
-  animation: neonPulse 3s ease-in-out infinite, fadeSlideDown 0.7s ease 0.2s both;
-  line-height: 1.1;
+  line-height: 1.15;
   user-select: none;
+  animation: neonPulse 3s ease-in-out infinite, fadeSlideDown 0.7s ease 0.15s both;
 }
-
 .vhq-tagline {
-  font-size: 0.82rem;
-  color: rgba(167,139,250,0.6);
-  letter-spacing: 0.06em;
-  margin-top: 0.7rem;
   font-family: 'IBM Plex Mono', monospace;
-  animation: fadeSlideDown 0.7s ease 0.35s both;
+  font-size: 0.72rem;
+  color: rgba(167,139,250,0.55);
+  letter-spacing: 0.06em;
+  margin-top: 0.65rem;
+  animation: fadeSlideDown 0.7s ease 0.3s both;
 }
-
 .vhq-version {
   display: inline-block;
-  background: rgba(124,58,237,0.15);
-  border: 1px solid rgba(124,58,237,0.35);
+  background: rgba(124,58,237,0.14);
+  border: 1px solid rgba(124,58,237,0.33);
   color: #a78bfa;
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 0.62rem;
-  letter-spacing: 0.12em;
-  padding: 0.2rem 0.7rem;
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  padding: 0.2rem 0.75rem;
   border-radius: 20px;
   margin-top: 0.7rem;
   animation: badgePop 0.5s ease 0.5s both;
 }
 
 /* ══════════════════════════════════════════
-   GLASS PANELS
+   GLASSMORPHIC CARDS
 ══════════════════════════════════════════ */
 .glass-card {
-  background: rgba(255,255,255,0.03);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255,255,255,0.07);
+  background: rgba(255,255,255,0.028);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(255,255,255,0.065);
   border-radius: 18px;
   padding: 1.8rem 1.6rem;
   margin-bottom: 1.1rem;
-  animation: glowBorder 4s ease-in-out infinite, fadeSlideUp 0.5s ease both;
   position: relative;
   overflow: hidden;
+  animation: glowBorder 4s ease-in-out infinite, fadeSlideUp 0.5s ease both;
 }
-
-/* inner top glow line */
 .glass-card::before {
   content: '';
   position: absolute;
   top: 0; left: 15%; right: 15%;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(167,139,250,0.4), transparent);
+  background: linear-gradient(90deg, transparent, rgba(167,139,250,0.35), transparent);
 }
-
 .glass-card-label {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 0.62rem;
+  font-size: 0.6rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: #7c3aed;
+  color: rgba(124,58,237,0.8);
   margin-bottom: 1rem;
 }
 
 /* ══════════════════════════════════════════
-   INPUT OVERRIDES
+   ST.TABS OVERRIDE — premium pill style
+══════════════════════════════════════════ */
+.stTabs [data-baseweb="tab-list"] {
+  background: rgba(255,255,255,0.025) !important;
+  border: 1px solid rgba(124,58,237,0.2) !important;
+  border-radius: 13px !important;
+  padding: 5px !important;
+  gap: 4px !important;
+  margin-bottom: 1.2rem !important;
+}
+.stTabs [data-baseweb="tab"] {
+  background: transparent !important;
+  border-radius: 9px !important;
+  color: rgba(167,139,250,0.55) !important;
+  font-family: 'Space Grotesk', sans-serif !important;
+  font-weight: 600 !important;
+  font-size: 0.88rem !important;
+  padding: 0.5rem 1.2rem !important;
+  border: none !important;
+  transition: all 0.2s ease !important;
+}
+.stTabs [aria-selected="true"] {
+  background: linear-gradient(135deg, #7c3aed, #a855f7) !important;
+  color: #fff !important;
+  box-shadow: 0 2px 14px rgba(124,58,237,0.4) !important;
+}
+.stTabs [data-baseweb="tab-border"] { display: none !important; }
+.stTabs [data-baseweb="tab-panel"] { padding-top: 0.2rem !important; }
+
+/* ══════════════════════════════════════════
+   INPUTS
 ══════════════════════════════════════════ */
 .stTextInput > div > div > input,
 .stTextArea > div > div > textarea,
 .stDateInput > div > div > input,
 .stSelectbox > div > div {
-  background: rgba(255,255,255,0.04) !important;
-  border: 1px solid rgba(124,58,237,0.3) !important;
+  background: rgba(255,255,255,0.038) !important;
+  border: 1px solid rgba(124,58,237,0.28) !important;
   border-radius: 10px !important;
   color: #E8E6F0 !important;
   font-family: 'Space Grotesk', sans-serif !important;
   font-size: 0.92rem !important;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
 }
 .stTextInput > div > div > input:focus,
 .stTextArea > div > div > textarea:focus {
   border-color: #7c3aed !important;
-  box-shadow: 0 0 0 3px rgba(124,58,237,0.18) !important;
-  outline: none !important;
+  box-shadow: 0 0 0 3px rgba(124,58,237,0.17) !important;
 }
-label, .stSelectbox label, .stTextInput label,
-.stTextArea label, .stDateInput label {
+label,
+.stSelectbox label,
+.stTextInput label,
+.stTextArea label,
+.stDateInput label {
   color: rgba(167,139,250,0.75) !important;
   font-size: 0.8rem !important;
   font-weight: 500 !important;
@@ -236,7 +253,6 @@ label, .stSelectbox label, .stTextInput label,
 /* ══════════════════════════════════════════
    BUTTONS
 ══════════════════════════════════════════ */
-/* Primary CTA */
 .stButton > button[kind="primary"] {
   width: 100%;
   background: linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #7c3aed 100%) !important;
@@ -248,32 +264,27 @@ label, .stSelectbox label, .stTextInput label,
   font-weight: 700 !important;
   font-size: 0.95rem !important;
   padding: 0.75rem 1.2rem !important;
-  letter-spacing: 0.04em;
-  transition: background-position 0.4s ease, transform 0.15s ease, box-shadow 0.2s ease !important;
+  letter-spacing: 0.04em !important;
   box-shadow: 0 4px 20px rgba(124,58,237,0.35) !important;
+  transition: background-position 0.4s ease, transform 0.15s ease, box-shadow 0.2s ease !important;
 }
 .stButton > button[kind="primary"]:hover {
   background-position: right center !important;
   transform: translateY(-1px) !important;
   box-shadow: 0 6px 28px rgba(124,58,237,0.5) !important;
 }
-.stButton > button[kind="primary"]:active {
-  transform: translateY(0) !important;
-}
-
-/* Secondary */
 .stButton > button[kind="secondary"] {
   width: 100%;
-  background: rgba(255,255,255,0.04) !important;
+  background: rgba(255,255,255,0.035) !important;
   color: rgba(167,139,250,0.85) !important;
-  border: 1px solid rgba(124,58,237,0.3) !important;
+  border: 1px solid rgba(124,58,237,0.28) !important;
   border-radius: 12px !important;
   font-family: 'Space Grotesk', sans-serif !important;
   font-size: 0.88rem !important;
   transition: border-color 0.2s ease, background 0.2s ease !important;
 }
 .stButton > button[kind="secondary"]:hover {
-  border-color: rgba(124,58,237,0.6) !important;
+  border-color: rgba(124,58,237,0.55) !important;
   background: rgba(124,58,237,0.08) !important;
 }
 
@@ -282,40 +293,11 @@ label, .stSelectbox label, .stTextInput label,
 ══════════════════════════════════════════ */
 .section-label {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 0.62rem;
+  font-size: 0.6rem;
   letter-spacing: 0.2em;
   text-transform: uppercase;
-  color: rgba(124,58,237,0.8);
+  color: rgba(124,58,237,0.75);
   margin: 1.8rem 0 0.7rem 0;
-}
-
-/* ══════════════════════════════════════════
-   AUTH TAB TOGGLE
-══════════════════════════════════════════ */
-.auth-toggle {
-  display: flex;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(124,58,237,0.2);
-  border-radius: 12px;
-  padding: 4px;
-  margin-bottom: 1.4rem;
-  gap: 4px;
-}
-.auth-tab {
-  flex: 1;
-  text-align: center;
-  padding: 0.5rem;
-  border-radius: 9px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  color: rgba(167,139,250,0.5);
-}
-.auth-tab-active {
-  background: linear-gradient(135deg, #7c3aed, #a855f7);
-  color: #fff;
-  box-shadow: 0 2px 12px rgba(124,58,237,0.4);
 }
 
 /* ══════════════════════════════════════════
@@ -323,118 +305,84 @@ label, .stSelectbox label, .stTextInput label,
 ══════════════════════════════════════════ */
 .nav-bar {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.4rem;
   background: rgba(255,255,255,0.02);
-  border: 1px solid rgba(124,58,237,0.15);
+  border: 1px solid rgba(124,58,237,0.14);
   border-radius: 14px;
-  padding: 6px;
+  padding: 5px;
   margin-bottom: 1.4rem;
-  flex-wrap: wrap;
-}
-.nav-pill {
-  flex: 1;
-  min-width: 80px;
-  text-align: center;
-  padding: 0.45rem 0.5rem;
-  border-radius: 10px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: rgba(167,139,250,0.5);
-  cursor: pointer;
-  transition: all 0.2s ease;
-  white-space: nowrap;
-}
-.nav-pill-active {
-  background: rgba(124,58,237,0.2);
-  color: #c4b5fd;
-  border: 1px solid rgba(124,58,237,0.4);
 }
 
 /* ══════════════════════════════════════════
-   PROFILE AVATAR RING
+   PROFILE AVATAR
 ══════════════════════════════════════════ */
 .avatar-ring {
-  width: 72px; height: 72px;
+  width: 70px; height: 70px;
   border-radius: 50%;
   background: linear-gradient(135deg, #7c3aed, #a855f7, #ec4899);
   display: flex; align-items: center; justify-content: center;
   margin: 0 auto 0.6rem auto;
-  font-size: 1.8rem;
-  box-shadow: 0 0 20px rgba(124,58,237,0.4);
+  font-size: 1.75rem; font-weight: 700;
+  box-shadow: 0 0 22px rgba(124,58,237,0.4);
   animation: glowBorder 3s ease-in-out infinite;
 }
 
 /* ══════════════════════════════════════════
    STAT CHIPS
 ══════════════════════════════════════════ */
-.stat-row {
-  display: flex;
-  gap: 0.6rem;
-  margin-top: 0.8rem;
-}
+.stat-row { display:flex; gap:0.55rem; margin-top:0.85rem; }
 .stat-chip {
-  flex: 1;
-  background: rgba(124,58,237,0.08);
-  border: 1px solid rgba(124,58,237,0.2);
+  flex:1;
+  background: rgba(124,58,237,0.07);
+  border: 1px solid rgba(124,58,237,0.18);
   border-radius: 10px;
   padding: 0.6rem 0.4rem;
   text-align: center;
 }
 .stat-chip-value {
   font-family: 'Orbitron', monospace;
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: #a78bfa;
+  font-size: 1.05rem; font-weight: 700; color: #a78bfa;
 }
 .stat-chip-label {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 0.6rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: rgba(167,139,250,0.5);
+  font-size: 0.58rem; letter-spacing: 0.1em;
+  text-transform: uppercase; color: rgba(167,139,250,0.45);
   margin-top: 0.15rem;
 }
 
 /* ══════════════════════════════════════════
-   AGE GATE BANNER
+   ALERT BANNERS
 ══════════════════════════════════════════ */
-.age-gate-banner {
+.banner-error {
   background: rgba(239,68,68,0.08);
-  border: 1px solid rgba(239,68,68,0.35);
-  border-radius: 12px;
-  padding: 0.85rem 1rem;
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
-  font-size: 0.85rem;
+  border: 1px solid rgba(239,68,68,0.32);
+  border-radius: 11px;
+  padding: 0.8rem 1rem;
+  font-size: 0.84rem;
   color: #fca5a5;
-  margin-bottom: 1rem;
-  animation: fadeSlideUp 0.3s ease both;
+  margin: 0.6rem 0;
+  animation: fadeSlideUp 0.25s ease both;
 }
-
-/* ══════════════════════════════════════════
-   SUCCESS BANNER
-══════════════════════════════════════════ */
-.success-banner {
-  background: rgba(34,197,94,0.08);
-  border: 1px solid rgba(34,197,94,0.3);
-  border-radius: 12px;
-  padding: 0.85rem 1rem;
-  font-size: 0.85rem;
+.banner-success {
+  background: rgba(34,197,94,0.07);
+  border: 1px solid rgba(34,197,94,0.28);
+  border-radius: 11px;
+  padding: 0.8rem 1rem;
+  font-size: 0.84rem;
   color: #86efac;
-  margin-bottom: 1rem;
-  animation: fadeSlideUp 0.3s ease both;
+  margin: 0.6rem 0;
+  animation: fadeSlideUp 0.25s ease both;
 }
 
 /* ══════════════════════════════════════════
    SHIMMER DIVIDER
 ══════════════════════════════════════════ */
-.shimmer-divider {
+.shimmer-div {
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(167,139,250,0.4) 50%, transparent);
-  margin: 1.4rem 0;
+  background: linear-gradient(90deg, transparent, rgba(167,139,250,0.38) 50%, transparent);
   background-size: 200% auto;
   animation: shimmer 3s linear infinite;
+  margin: 1.4rem 0;
 }
 
 /* ══════════════════════════════════════════
@@ -443,17 +391,15 @@ label, .stSelectbox label, .stTextInput label,
 .vhq-footer {
   text-align: center;
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 0.62rem;
+  font-size: 0.6rem;
   letter-spacing: 0.12em;
-  color: rgba(124,58,237,0.35);
+  color: rgba(124,58,237,0.3);
   margin-top: 3rem;
   padding-top: 1rem;
-  border-top: 1px solid rgba(124,58,237,0.1);
+  border-top: 1px solid rgba(124,58,237,0.08);
 }
 
-/* Misc */
 .stAlert { border-radius: 10px !important; }
-hr { border-color: rgba(124,58,237,0.12); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -472,10 +418,14 @@ supabase = init_supabase()
 
 
 # ═══════════════════════════════════════════════════════════════
-# AUTH HELPERS
+# AUTH & PROFILE HELPERS
 # ═══════════════════════════════════════════════════════════════
 def auth_signup(email: str, password: str):
-    return supabase.auth.sign_up({"email": email, "password": password})
+    return supabase.auth.sign_up({
+        "email": email,
+        "password": password,
+        "options": {"data": {"onboarded": False}},
+    })
 
 def auth_login(email: str, password: str):
     return supabase.auth.sign_in_with_password({"email": email, "password": password})
@@ -487,9 +437,8 @@ def get_profile(user_id: str) -> dict | None:
     res = supabase.table("profiles").select("*").eq("id", user_id).execute()
     return res.data[0] if res.data else None
 
-def save_profile(user_id: str, full_name: str, bio: str, dob: str) -> dict:
-    """Upsert the profile row after successful onboarding."""
-    return supabase.table("profiles").upsert({
+def save_profile(user_id: str, full_name: str, bio: str, dob: str):
+    supabase.table("profiles").upsert({
         "id": user_id,
         "full_name": full_name,
         "bio": bio,
@@ -505,202 +454,201 @@ def age_from_dob(dob: date) -> int:
 
 
 # ═══════════════════════════════════════════════════════════════
-# SESSION STATE INIT
+# SESSION STATE
 # ═══════════════════════════════════════════════════════════════
-defaults = {
+_defaults = {
     "authenticated": False,
-    "user_id": None,
-    "user_email": None,
-    "onboarded": False,
-    "profile": None,
-    "auth_mode": "login",     # "login" | "signup"
-    "active_tab": "Audit",   # dashboard tab
+    "user_id":       None,
+    "user_email":    None,
+    "onboarded":     False,
+    "profile":       None,
+    "active_tab":    "Audit",
 }
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+for _k, _v in _defaults.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
 
 
 # ═══════════════════════════════════════════════════════════════
-# VHQ HEADER (always visible)
+# VHQ HEADER — always visible
 # ═══════════════════════════════════════════════════════════════
 st.markdown("""
 <div class="vhq-header">
   <div class="vhq-eyebrow">⬡ Powered by Multi-LLM Intelligence</div>
   <div class="vhq-logo">VHQ · SOCIAL<br>AUDITOR</div>
   <div class="vhq-tagline">Algorithmic Diagnostics · Viral Growth Engine · AI Analytics</div>
-  <div class="vhq-version">v2.0 · PHASE 1 + 2 LIVE</div>
+  <div class="vhq-version">v2.0 · PHASE 1 + 2</div>
 </div>
 """, unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════
-# ── PAGE: AUTH ──────────────────────────────────────────────────
+# PAGE: AUTH
 # ═══════════════════════════════════════════════════════════════
 if not st.session_state.authenticated:
 
-    is_login = st.session_state.auth_mode == "login"
+    tab_login, tab_signup = st.tabs(["🔐  Sign In", "🚀  Create Account"])
 
-    # Toggle tabs
-    st.markdown(f"""
-    <div class="auth-toggle">
-      <div class="auth-tab {'auth-tab-active' if is_login else ''}">Sign In</div>
-      <div class="auth-tab {'auth-tab-active' if not is_login else ''}">Create Account</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # ── Sign In tab ───────────────────────────────────────────
+    with tab_login:
+        st.markdown('<div class="glass-card"><div class="glass-card-label">— Sign In to VHQ —</div>', unsafe_allow_html=True)
 
-    col_a, col_b = st.columns(2)
-    if col_a.button("Sign In", type="primary" if is_login else "secondary", use_container_width=True):
-        st.session_state.auth_mode = "login"
-        st.rerun()
-    if col_b.button("Create Account", type="primary" if not is_login else "secondary", use_container_width=True):
-        st.session_state.auth_mode = "signup"
-        st.rerun()
+        li_email = st.text_input("Email address", placeholder="you@email.com", key="li_email")
+        li_pw    = st.text_input("Password", type="password", placeholder="Your password", key="li_pw")
+        li_btn   = st.button("⬡  Sign In", type="primary", use_container_width=True, key="li_btn")
 
-    st.markdown('<div class="shimmer-divider"></div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # Auth form
-    st.markdown(f'<div class="glass-card"><div class="glass-card-label">{"— Sign In —" if is_login else "— New Account —"}</div>', unsafe_allow_html=True)
-
-    email    = st.text_input("Email address", placeholder="you@email.com", key="auth_email")
-    password = st.text_input("Password", type="password", placeholder="Min. 6 characters", key="auth_pw")
-
-    if is_login:
-        submit = st.button("⬡  Sign In to VHQ", type="primary", use_container_width=True)
-    else:
-        submit = st.button("⬡  Create My Account", type="primary", use_container_width=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    if submit:
-        if not email.strip() or not password.strip():
-            st.markdown('<div class="age-gate-banner">⚠ Please fill in both email and password.</div>', unsafe_allow_html=True)
-        elif len(password) < 6:
-            st.markdown('<div class="age-gate-banner">⚠ Password must be at least 6 characters.</div>', unsafe_allow_html=True)
-        else:
-            try:
-                if is_login:
-                    res  = auth_login(email.strip().lower(), password)
+        if li_btn:
+            if not li_email.strip() or not li_pw.strip():
+                st.markdown('<div class="banner-error">⚠ Please enter your email and password.</div>', unsafe_allow_html=True)
+            else:
+                try:
+                    res  = auth_login(li_email.strip().lower(), li_pw)
                     user = res.user
                     if user:
                         st.session_state.authenticated = True
                         st.session_state.user_id       = user.id
                         st.session_state.user_email    = user.email
                         profile = get_profile(user.id)
-                        st.session_state.profile    = profile
-                        st.session_state.onboarded  = bool(profile and profile.get("onboarded"))
+                        st.session_state.profile   = profile
+                        st.session_state.onboarded = bool(profile and profile.get("onboarded"))
                         st.rerun()
                     else:
-                        st.markdown('<div class="age-gate-banner">⚠ Invalid email or password.</div>', unsafe_allow_html=True)
-                else:
-                    res  = auth_signup(email.strip().lower(), password)
+                        st.markdown('<div class="banner-error">⚠ Invalid email or password.</div>', unsafe_allow_html=True)
+                except Exception as e:
+                    msg = str(e).lower()
+                    if "invalid login" in msg or "invalid credentials" in msg or "invalid" in msg:
+                        st.markdown('<div class="banner-error">⚠ Wrong email or password. Please try again.</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="banner-error">⚠ Sign-in error: {str(e)[:120]}</div>', unsafe_allow_html=True)
+
+    # ── Create Account tab ────────────────────────────────────
+    with tab_signup:
+        st.markdown('<div class="glass-card"><div class="glass-card-label">— New Account —</div>', unsafe_allow_html=True)
+
+        su_email = st.text_input("Email address", placeholder="you@email.com", key="su_email")
+        su_pw    = st.text_input("Password", type="password", placeholder="Min. 6 characters", key="su_pw")
+        su_pw2   = st.text_input("Confirm password", type="password", placeholder="Repeat password", key="su_pw2")
+        su_btn   = st.button("⬡  Create My Account", type="primary", use_container_width=True, key="su_btn")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        if su_btn:
+            if not su_email.strip() or not su_pw.strip():
+                st.markdown('<div class="banner-error">⚠ Email and password are required.</div>', unsafe_allow_html=True)
+            elif len(su_pw) < 6:
+                st.markdown('<div class="banner-error">⚠ Password must be at least 6 characters.</div>', unsafe_allow_html=True)
+            elif su_pw != su_pw2:
+                st.markdown('<div class="banner-error">⚠ Passwords do not match.</div>', unsafe_allow_html=True)
+            else:
+                try:
+                    res  = auth_signup(su_email.strip().lower(), su_pw)
                     user = res.user
                     if user:
-                        st.markdown('<div class="success-banner">✓ Account created! Check your email to confirm, then sign in.</div>', unsafe_allow_html=True)
-                        st.session_state.auth_mode = "login"
+                        # Auto sign-in immediately after signup (email confirm disabled in Supabase)
+                        login_res = auth_login(su_email.strip().lower(), su_pw)
+                        if login_res.user:
+                            st.session_state.authenticated = True
+                            st.session_state.user_id       = login_res.user.id
+                            st.session_state.user_email    = login_res.user.email
+                            st.session_state.profile       = None
+                            st.session_state.onboarded     = False
+                            st.rerun()
+                        else:
+                            st.markdown('<div class="banner-success">✓ Account created! Switch to Sign In to continue.</div>', unsafe_allow_html=True)
                     else:
-                        st.markdown('<div class="age-gate-banner">⚠ Could not create account. Try a different email.</div>', unsafe_allow_html=True)
-            except Exception as e:
-                msg = str(e).lower()
-                if "already registered" in msg or "already exists" in msg:
-                    st.markdown('<div class="age-gate-banner">⚠ Email already registered. Sign in instead.</div>', unsafe_allow_html=True)
-                elif "invalid login" in msg or "invalid credentials" in msg:
-                    st.markdown('<div class="age-gate-banner">⚠ Wrong email or password.</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<div class="age-gate-banner">⚠ Auth error: {str(e)[:120]}</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="banner-error">⚠ Could not create account. Try a different email.</div>', unsafe_allow_html=True)
+                except Exception as e:
+                    msg = str(e).lower()
+                    if "already registered" in msg or "already exists" in msg or "duplicate" in msg:
+                        st.markdown('<div class="banner-error">⚠ This email is already registered. Use Sign In.</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="banner-error">⚠ Signup error: {str(e)[:120]}</div>', unsafe_allow_html=True)
 
     st.markdown("""
-    <div class="vhq-footer">
-      VHQ · SOCIAL AUDITOR &nbsp;·&nbsp; PHASE 1 + 2 &nbsp;·&nbsp; BUILD 2025
-    </div>
+    <div class="vhq-footer">VHQ · SOCIAL AUDITOR &nbsp;·&nbsp; PHASE 1 + 2 &nbsp;·&nbsp; 2025</div>
     """, unsafe_allow_html=True)
     st.stop()
 
 
 # ═══════════════════════════════════════════════════════════════
-# ── PAGE: PROFILE ONBOARDING ───────────────────────────────────
+# PAGE: PROFILE ONBOARDING
 # ═══════════════════════════════════════════════════════════════
 if not st.session_state.onboarded:
 
     st.markdown('<div class="section-label">⬡ &nbsp; Complete Your Profile</div>', unsafe_allow_html=True)
-    st.markdown('<div class="glass-card"><div class="glass-card-label">— Profile Setup —</div>', unsafe_allow_html=True)
+    st.markdown('<div class="glass-card"><div class="glass-card-label">— Setup: Step 1 of 1 —</div>', unsafe_allow_html=True)
 
-    full_name = st.text_input("Full Name", placeholder="e.g. Vaibhav Sharma", key="ob_name")
-    bio       = st.text_area("Bio", placeholder="Tell us what you create or build…", height=90, key="ob_bio")
-    dob       = st.date_input(
-        "Date of Birth",
+    ob_name = st.text_input("Full Name *", placeholder="e.g. Vaibhav Sharma", key="ob_name")
+    ob_bio  = st.text_area("Bio", placeholder="Tell the world what you create or build…", height=85, key="ob_bio")
+    ob_dob  = st.date_input(
+        "Date of Birth *",
         value=date(2000, 1, 1),
-        min_value=date(1900, 1, 1),
+        min_value=date(1910, 1, 1),
         max_value=date.today(),
         key="ob_dob",
     )
 
-    # Live age-gate feedback
-    if dob:
-        age = age_from_dob(dob)
-        if age < 13:
-            st.markdown(f'<div class="age-gate-banner">🔒 You must be 13 or older to use VHQ. Detected age: {age}.</div>', unsafe_allow_html=True)
+    # Live age feedback
+    if ob_dob:
+        _age = age_from_dob(ob_dob)
+        if _age < 13:
+            st.markdown(f'<div class="banner-error">🔒 You must be 13 or older to use VHQ. Detected age: {_age}.</div>', unsafe_allow_html=True)
         else:
-            st.markdown(f'<div class="success-banner">✓ Age verified &nbsp;({age} years old)</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="banner-success">✓ Age verified — {_age} years old.</div>', unsafe_allow_html=True)
 
-    save = st.button("⬡  Save Profile & Enter VHQ", type="primary", use_container_width=True)
+    ob_save = st.button("⬡  Save & Enter Dashboard", type="primary", use_container_width=True, key="ob_save")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    if save:
-        if not full_name.strip():
-            st.markdown('<div class="age-gate-banner">⚠ Full name is required.</div>', unsafe_allow_html=True)
-        elif not dob:
-            st.markdown('<div class="age-gate-banner">⚠ Date of birth is required.</div>', unsafe_allow_html=True)
-        elif age_from_dob(dob) < 13:
-            st.markdown('<div class="age-gate-banner">🔒 You must be 13 or older to continue.</div>', unsafe_allow_html=True)
+    if ob_save:
+        if not ob_name.strip():
+            st.markdown('<div class="banner-error">⚠ Full name is required.</div>', unsafe_allow_html=True)
+        elif age_from_dob(ob_dob) < 13:
+            st.markdown('<div class="banner-error">🔒 Must be 13+ to use VHQ. Access denied.</div>', unsafe_allow_html=True)
         else:
             try:
                 save_profile(
                     user_id=st.session_state.user_id,
-                    full_name=full_name.strip(),
-                    bio=bio.strip(),
-                    dob=str(dob),
+                    full_name=ob_name.strip(),
+                    bio=ob_bio.strip(),
+                    dob=str(ob_dob),
                 )
                 st.session_state.onboarded = True
                 st.session_state.profile   = get_profile(st.session_state.user_id)
-                st.markdown('<div class="success-banner">✓ Profile saved! Loading your dashboard…</div>', unsafe_allow_html=True)
                 st.rerun()
             except Exception as e:
-                st.markdown(f'<div class="age-gate-banner">⚠ Could not save profile: {str(e)[:120]}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="banner-error">⚠ Could not save profile: {str(e)[:120]}</div>', unsafe_allow_html=True)
 
-    st.markdown("""
-    <div class="vhq-footer">VHQ · SOCIAL AUDITOR &nbsp;·&nbsp; SETUP</div>
-    """, unsafe_allow_html=True)
+    st.markdown('<div class="vhq-footer">VHQ · PROFILE SETUP</div>', unsafe_allow_html=True)
     st.stop()
 
 
 # ═══════════════════════════════════════════════════════════════
-# ── PAGE: DASHBOARD (authenticated + onboarded) ────────────────
+# PAGE: MAIN DASHBOARD
 # ═══════════════════════════════════════════════════════════════
-profile    = st.session_state.profile or {}
-full_name  = profile.get("full_name", "Creator")
-tier       = profile.get("tier", "free").upper()
-initials   = "".join(w[0] for w in full_name.split()[:2]).upper() or "VH"
-tier_color = "#f59e0b" if tier == "FREE" else "#a78bfa"
+profile   = st.session_state.profile or {}
+full_name = profile.get("full_name", "Creator")
+tier      = profile.get("tier", "free").upper()
+initials  = "".join(w[0] for w in full_name.split()[:2]).upper() or "VH"
+tier_col  = "#f59e0b" if tier == "FREE" else "#a78bfa"
 
-# ── Profile card ──────────────────────────────────────────────
+# ── Profile summary card ───────────────────────────────────────
 st.markdown(f"""
 <div class="glass-card" style="text-align:center; animation-delay:0.05s">
   <div class="avatar-ring">{initials}</div>
-  <div style="font-size:1.05rem; font-weight:700; letter-spacing:0.02em;">{full_name}</div>
-  <div style="font-size:0.78rem; color:rgba(167,139,250,0.6); margin:0.2rem 0 0.5rem;">
+  <div style="font-size:1.05rem;font-weight:700;letter-spacing:0.02em">{full_name}</div>
+  <div style="font-size:0.78rem;color:rgba(167,139,250,0.55);margin:0.2rem 0 0.5rem">
     {st.session_state.user_email}
   </div>
   <span style="
     display:inline-block;
-    background:rgba(124,58,237,0.15);
-    border:1px solid {tier_color}55;
-    color:{tier_color};
+    background:rgba(124,58,237,0.13);
+    border:1px solid {tier_col}44;
+    color:{tier_col};
     font-family:'IBM Plex Mono',monospace;
-    font-size:0.62rem;
-    letter-spacing:0.14em;
-    padding:0.2rem 0.8rem;
-    border-radius:20px;
+    font-size:0.6rem; letter-spacing:0.14em;
+    padding:0.2rem 0.85rem; border-radius:20px;
   ">{tier} PLAN</span>
   <div class="stat-row">
     <div class="stat-chip">
@@ -719,102 +667,98 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Nav tabs ──────────────────────────────────────────────────
-tabs = ["⬡ Audit", "◈ Reports", "◉ Profile", "⚙ Settings"]
-tab_keys = ["Audit", "Reports", "Profile", "Settings"]
+st.markdown('<div class="shimmer-div"></div>', unsafe_allow_html=True)
 
-active_tab = st.session_state.active_tab
+# ── Dashboard tabs ─────────────────────────────────────────────
+dash_tabs = st.tabs(["⬡  Audit", "◈  Reports", "◉  Profile", "⚙  Settings"])
 
-st.markdown('<div class="nav-bar">', unsafe_allow_html=True)
-cols = st.columns(len(tabs))
-for i, (col, label, key) in enumerate(zip(cols, tabs, tab_keys)):
-    is_active = (active_tab == key)
-    if col.button(label, key=f"tab_{key}", type="secondary", use_container_width=True):
-        st.session_state.active_tab = key
-        st.rerun()
-st.markdown('</div>', unsafe_allow_html=True)
-
-st.markdown('<div class="shimmer-divider"></div>', unsafe_allow_html=True)
-
-
-# ── TAB: AUDIT ────────────────────────────────────────────────
-if active_tab == "Audit":
+# ── TAB 1: AUDIT ──────────────────────────────────────────────
+with dash_tabs[0]:
     st.markdown('<div class="section-label">⬡ &nbsp; Platform Audit Engine</div>', unsafe_allow_html=True)
     st.markdown('<div class="glass-card"><div class="glass-card-label">— Audit Module —</div>', unsafe_allow_html=True)
     st.markdown("""
-    <div style="text-align:center; padding: 2rem 1rem; color: rgba(167,139,250,0.5);">
-      <div style="font-size:2rem; margin-bottom:0.7rem;">⬡</div>
-      <div style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; letter-spacing:0.1em;">
+    <div style="text-align:center;padding:2.2rem 1rem;color:rgba(167,139,250,0.4)">
+      <div style="font-size:2rem;margin-bottom:0.6rem">⬡</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:0.75rem;letter-spacing:0.1em">
         AUDIT ENGINE · PHASE 3 COMING NEXT
       </div>
-      <div style="font-size:0.82rem; margin-top:0.5rem; color:rgba(167,139,250,0.35);">
-        Platform selector, metric inputs, and AI diagnostics will live here.
+      <div style="font-size:0.8rem;margin-top:0.45rem;color:rgba(167,139,250,0.28)">
+        Platform selector, metric inputs &amp; AI diagnostics will live here.
       </div>
     </div>
     """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ── TAB: REPORTS ─────────────────────────────────────────────
-elif active_tab == "Reports":
+# ── TAB 2: REPORTS ────────────────────────────────────────────
+with dash_tabs[1]:
     st.markdown('<div class="section-label">◈ &nbsp; Audit Reports</div>', unsafe_allow_html=True)
     st.markdown('<div class="glass-card"><div class="glass-card-label">— Reports —</div>', unsafe_allow_html=True)
     st.markdown("""
-    <div style="text-align:center; padding:2rem 1rem; color:rgba(167,139,250,0.4);">
-      <div style="font-size:0.82rem; font-family:'IBM Plex Mono',monospace; letter-spacing:0.1em;">
+    <div style="text-align:center;padding:2rem 1rem;color:rgba(167,139,250,0.35)">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:0.75rem;letter-spacing:0.1em">
         NO REPORTS YET · RUN YOUR FIRST AUDIT
       </div>
     </div>
     """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ── TAB: PROFILE ─────────────────────────────────────────────
-elif active_tab == "Profile":
+# ── TAB 3: PROFILE ────────────────────────────────────────────
+with dash_tabs[2]:
     st.markdown('<div class="section-label">◉ &nbsp; Your Profile</div>', unsafe_allow_html=True)
     st.markdown('<div class="glass-card"><div class="glass-card-label">— Account Details —</div>', unsafe_allow_html=True)
 
-    st.markdown(f"**Full Name** &nbsp; `{profile.get('full_name','—')}`")
-    st.markdown(f"**Bio** &nbsp; {profile.get('bio','—') or '—'}")
-    st.markdown(f"**Date of Birth** &nbsp; `{profile.get('dob','—')}`")
-    st.markdown(f"**Email** &nbsp; `{st.session_state.user_email}`")
-    st.markdown(f"**Tier** &nbsp; `{tier}`")
+    fields = {
+        "Full Name":  profile.get("full_name", "—"),
+        "Bio":        profile.get("bio", "—") or "—",
+        "Date of Birth": profile.get("dob", "—"),
+        "Email":      st.session_state.user_email,
+        "Plan":       tier,
+    }
+    for label, val in fields.items():
+        st.markdown(
+            f'<div style="margin-bottom:0.6rem">'
+            f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:0.65rem;'
+            f'letter-spacing:0.12em;text-transform:uppercase;color:rgba(124,58,237,0.65)">'
+            f'{label}</span><br>'
+            f'<span style="font-size:0.92rem;color:#E8E6F0">{val}</span></div>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown('</div>', unsafe_allow_html=True)
-
     st.markdown("""
-    <div style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem;
-      color:rgba(124,58,237,0.5); text-align:center; margin-top:0.5rem; letter-spacing:0.08em;">
-      ⚠ Name/username edits limited to 2× per 10 days (Phase 3 enforcement)
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:0.65rem;
+      color:rgba(124,58,237,0.4);text-align:center;letter-spacing:0.07em;margin-top:0.3rem">
+      ⚠ Name / username edits: max 2× per 10 days (enforced in Phase 3)
     </div>
     """, unsafe_allow_html=True)
 
-# ── TAB: SETTINGS ────────────────────────────────────────────
-elif active_tab == "Settings":
+# ── TAB 4: SETTINGS ───────────────────────────────────────────
+with dash_tabs[3]:
     st.markdown('<div class="section-label">⚙ &nbsp; Settings</div>', unsafe_allow_html=True)
     st.markdown('<div class="glass-card"><div class="glass-card-label">— Preferences —</div>', unsafe_allow_html=True)
     st.markdown("""
-    <div style="font-family:'IBM Plex Mono',monospace; font-size:0.75rem;
-      color:rgba(167,139,250,0.45); letter-spacing:0.06em; line-height:1.8;">
-      ◉ &nbsp; AI Engine &nbsp;&nbsp;&nbsp; Backend-managed (Phase 3)<br>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:0.73rem;
+      color:rgba(167,139,250,0.4);letter-spacing:0.06em;line-height:2">
+      ◉ &nbsp; AI Engine &nbsp;&nbsp;&nbsp;&nbsp; Backend-managed (Phase 3)<br>
       ◉ &nbsp; Notifications &nbsp; Phase 3<br>
-      ◉ &nbsp; Upgrade to Pro &nbsp; Phase 4 (Razorpay)<br>
+      ◉ &nbsp; Upgrade to Pro &nbsp; Phase 4 · Razorpay<br>
       ◉ &nbsp; Ad preferences &nbsp; Phase 4
     </div>
     """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="shimmer-divider"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="shimmer-div"></div>', unsafe_allow_html=True)
 
-    if st.button("⬡  Sign Out", type="secondary", use_container_width=True):
+    if st.button("⬡  Sign Out of VHQ", type="secondary", use_container_width=True, key="signout"):
         auth_logout()
-        for k in list(st.session_state.keys()):
-            del st.session_state[k]
+        for _k in list(st.session_state.keys()):
+            del st.session_state[_k]
         st.rerun()
 
-
-# ── Footer ────────────────────────────────────────────────────
+# ── Footer ─────────────────────────────────────────────────────
 st.markdown("""
 <div class="vhq-footer">
   VHQ · SOCIAL AUDITOR &nbsp;·&nbsp; PHASE 1 + 2 COMPLETE
-  &nbsp;·&nbsp; PHASE 3 NEXT &nbsp;·&nbsp; BUILD 2025
+  &nbsp;·&nbsp; PHASE 3 NEXT &nbsp;·&nbsp; 2025
 </div>
 """, unsafe_allow_html=True)
